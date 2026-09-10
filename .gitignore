@@ -27,3 +27,7 @@ ops.csv
 ops.json
 *-plan.md
 *-plan.json
+missing-from-mega.*
+missing-*.md
+missing-*.csv
+missing-*.json

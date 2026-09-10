@@ -14,6 +14,7 @@ from pathlib import Path
 from . import __version__
 from .apply import apply_operations
 from .bin import build_bin_plan, execute_bin_plan, read_bin_plan, write_bin_plan
+from .compare import compare_local, write_comparison
 from .doctor import run_checks
 from .dupes import cluster_nodes, nodes_from_rows
 from .fingerprint import run_fingerprint
@@ -249,6 +250,28 @@ def _cmd_apply(args, conn, make_remote) -> int:
         print("All changes are moves; binned items stay recoverable until you "
               "empty the Rubbish Bin. Re-run scan-fingerprints to refresh.")
     return 0 if r.failed == 0 else 1
+
+
+def _cmd_compare_local(args, conn, make_remote) -> int:
+    """List local files with no byte-identical copy anywhere in the account."""
+    root = Path(args.path).resolve()
+    if not root.is_dir():
+        print(f"not a directory: {root}", file=sys.stderr)
+        return 1
+    if not conn.execute('SELECT 1 FROM nodes WHERE scope="remote" AND crc IS NOT NULL LIMIT 1').fetchone():
+        print("no remote fingerprints indexed — run scan-fingerprints first",
+              file=sys.stderr)
+        return 1
+    print(f"comparing {root} against the account by content fingerprint ...")
+    result = compare_local(conn, root,
+                           on_progress=lambda i: print(f"  {i:,} files ...", flush=True))
+    write_comparison(result, Path(args.out), local_root=root)
+    missing = [r for r in result if r.status == "missing"]
+    print(f"scanned {len(result):,}: present {len(result) - len(missing):,}, "
+          f"NOT in MEGA {len(missing):,} "
+          f"({sum(r.size for r in missing) / 1e9:.2f} GB)")
+    print(f"written: {args.out}.md, {args.out}.csv, {args.out}.json")
+    return 0
 
 
 def _cmd_folders(args, conn, make_remote) -> int:
@@ -493,6 +516,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="execute at most N operations (trial batch)")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=_cmd_apply)
+
+    p = sub.add_parser("compare-local",
+                       help="list local files with no copy anywhere in MEGA")
+    p.add_argument("path")
+    p.add_argument("--out", default="missing-from-mega",
+                   help="base name; writes .md, .csv and .json")
+    p.set_defaults(func=_cmd_compare_local)
 
     p = sub.add_parser("folders",
                        help="folder-level cleanup plan (collapse decisions)")
