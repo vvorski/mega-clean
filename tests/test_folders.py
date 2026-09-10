@@ -168,3 +168,24 @@ def test_plan_never_recommends_collapsing_the_canonical_folder(tmp_path):
     text = out.read_text()
     assert "into `Camera uploads`" not in text
     assert "`Library/Camera`" in text
+
+
+def test_an_inbox_is_drained_never_removed(tmp_path):
+    """A phone's auto-sync target refills itself; deleting the folder is wrong
+    advice. Its duplicated files can go; its unfiled ones are a backlog."""
+    from megaclean.folders import merge_decisions
+    dup_a = [n(f"Inbox/{i}.jpg", size=100) for i in range(3)]
+    dup_b = [n(f"Library/{i}.jpg", size=100) for i in range(3)]
+    backlog = [n(f"Inbox/new{i}.jpg", size=50) for i in range(4)]
+    overlaps = analyse_folders([cluster(a, b) for a, b in zip(dup_a, dup_b)],
+                               dup_a + dup_b + backlog, min_files=1)
+    d = merge_decisions(overlaps, prefer=("Library",), inbox=("Inbox",))[0]
+    assert d.source_is_inbox
+    assert d.must_move_files == 0          # a backlog is not a blocker
+    assert d.backlog_files == 4
+
+    out = tmp_path / "p.md"
+    write_folder_plan(overlaps, out, prefer=("Library",), inbox=("Inbox",))
+    text = out.read_text()
+    assert "remove `Inbox`" not in text
+    assert "still to file" in text.lower()

@@ -106,6 +106,9 @@ class MergeDecision:
     must_move_bytes: int
     must_move_examples: tuple[str, ...]
     other_counterparts: tuple[str, ...]
+    source_is_inbox: bool = False
+    backlog_files: int = 0
+    backlog_bytes: int = 0
 
 
 def _preference(folder: str, prefer: Sequence[str]) -> int:
@@ -117,13 +120,18 @@ def _preference(folder: str, prefer: Sequence[str]) -> int:
 
 def merge_decisions(overlaps: Sequence[FolderOverlap],
                     prefer: Sequence[str] = (),
-                    min_coverage: float = 0.5) -> list[MergeDecision]:
+                    min_coverage: float = 0.5,
+                    inbox: Sequence[str] = ()) -> list[MergeDecision]:
     """One directional decision per overlapping pair.
 
     Direction is chosen by: the canonical folder survives; failing that the
     folder with more unique content survives, because that means moving fewer
     files. Reciprocal pairs collapse to a single decision rather than two
     contradictory ones.
+
+    Folders named in `inbox` are auto-sync targets. They are drained, never
+    removed -- a phone would simply refill them -- so their unique files are
+    reported as a filing backlog rather than as a blocker to deletion.
     """
     index = {o.folder: o for o in overlaps}
     decisions: list[MergeDecision] = []
@@ -152,12 +160,16 @@ def merge_decisions(overlaps: Sequence[FolderOverlap],
             if source is None:
                 continue
 
+        is_inbox = _preference(source.folder, inbox) < len(inbox)
         decisions.append(MergeDecision(
             source=source.folder, destination=destination,
             shared_files=files, shared_bytes=byts,
-            must_move_files=source.unique_files,
-            must_move_bytes=source.unique_bytes,
-            must_move_examples=source.unique_examples,
+            must_move_files=0 if is_inbox else source.unique_files,
+            must_move_bytes=0 if is_inbox else source.unique_bytes,
+            must_move_examples=() if is_inbox else source.unique_examples,
+            source_is_inbox=is_inbox,
+            backlog_files=source.unique_files if is_inbox else 0,
+            backlog_bytes=source.unique_bytes if is_inbox else 0,
             other_counterparts=tuple(
                 name for name, _, _ in source.counterparts[1:4]),
         ))
@@ -176,7 +188,8 @@ def _human(n: int) -> str:
 
 def write_folder_plan(overlaps: Sequence[FolderOverlap], path: Path, *,
                       min_coverage: float = 0.5,
-                      prefer: Sequence[str] = ()) -> Path:
+                      prefer: Sequence[str] = (),
+                      inbox: Sequence[str] = ()) -> Path:
     """A markdown worklist: one directional decision per overlapping pair."""
     lines = [
         "# Folder cleanup plan",
@@ -189,7 +202,7 @@ def write_folder_plan(overlaps: Sequence[FolderOverlap], path: Path, *,
         "those are the ones that exist nowhere else.",
         "",
     ]
-    decisions = merge_decisions(overlaps, prefer, min_coverage)
+    decisions = merge_decisions(overlaps, prefer, min_coverage, inbox)
     total = sum(d.shared_bytes for d in decisions)
     lines += [f"{len(decisions)} decisions, covering {_human(total)} of "
               f"content stored twice.", ""]
@@ -206,7 +219,21 @@ def write_folder_plan(overlaps: Sequence[FolderOverlap], path: Path, *,
             f"({_human(d.must_move_bytes)})",
             "",
         ]
-        if d.must_move_files == 0:
+        if d.source_is_inbox:
+            lines += [
+                f"`{d.source}` is an auto-sync inbox — it refills itself, so it "
+                f"is drained, never removed.",
+                "",
+                f"**Delete the {d.shared_files:,} files "
+                f"({_human(d.shared_bytes)}) already filed in "
+                f"`{d.destination}`.**",
+                "",
+                f"Separately, {d.backlog_files:,} files "
+                f"({_human(d.backlog_bytes)}) here are still to file — that is "
+                f"a backlog, not redundancy.",
+                "",
+            ]
+        elif d.must_move_files == 0:
             lines += [f"**Safe to remove `{d.source}`** — nothing unique in it.",
                       ""]
         else:

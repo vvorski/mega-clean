@@ -147,10 +147,12 @@ def _cmd_folders(args, conn, make_remote) -> int:
                              prefer=tuple(args.prefer))
     overlaps = analyse_folders(clusters, nodes, min_files=args.min_files)
     prefer = tuple(args.prefer)
+    inbox = tuple(args.inbox)
     out = write_folder_plan(overlaps, Path(args.out),
-                            min_coverage=args.min_coverage, prefer=prefer)
+                            min_coverage=args.min_coverage, prefer=prefer,
+                            inbox=inbox)
     from .folders import merge_decisions
-    decisions = merge_decisions(overlaps, prefer, args.min_coverage)
+    decisions = merge_decisions(overlaps, prefer, args.min_coverage, inbox)
     print(f"{len(decisions)} folder decisions covering "
           f"{sum(d.shared_bytes for d in decisions) / 1e9:.2f} GB stored twice")
     print(f"  remove outright (nothing unique): "
@@ -330,6 +332,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--threshold", type=int, default=6)
     p.add_argument("--prefer", action="append", default=[],
                    help="path prefix of a canonical folder; repeatable")
+    p.add_argument("--inbox", action="append", default=[],
+                   help="path prefix of an auto-sync inbox: drained of filed "
+                        "copies, never removed. Repeatable")
     p.set_defaults(func=_cmd_folders)
 
     p = sub.add_parser("previews",
