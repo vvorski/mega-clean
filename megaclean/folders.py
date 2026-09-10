@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .dupes import Cluster, Node
@@ -30,6 +30,9 @@ class FolderOverlap:
     unique_bytes: int
     counterparts: tuple[tuple[str, int, int], ...]   # (folder, files, bytes)
     unique_examples: tuple[str, ...]
+    # Per duplicated file: (key, filename, size, byte_verified, folders that
+    # hold another copy). Lets a decision check that a copy actually survives.
+    duplicated_detail: tuple[tuple[str, str, int, bool, tuple[str, ...]], ...] = ()
 
     @property
     def coverage(self) -> float:
@@ -46,6 +49,7 @@ def analyse_folders(clusters: Sequence[Cluster], nodes: Sequence[Node], *,
         entry[1] += node.size
 
     elsewhere: dict[str, dict[str, None]] = defaultdict(dict)
+    copy_dirs: dict[str, set[str]] = defaultdict(set)     # key -> other folders
     shared_files: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     shared_bytes: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
 
@@ -61,6 +65,8 @@ def analyse_folders(clusters: Sequence[Cluster], nodes: Sequence[Node], *,
             for folder, members in by_dir.items():
                 for member in members:
                     elsewhere[folder][member.key] = None
+                    copy_dirs[member.key].update(
+                        other for other in by_dir if other != folder)
                 for other, other_members in by_dir.items():
                     if other == folder:
                         continue
@@ -91,6 +97,10 @@ def analyse_folders(clusters: Sequence[Cluster], nodes: Sequence[Node], *,
             counterparts=counterparts,
             unique_examples=tuple(m.path.rsplit("/", 1)[-1]
                                   for m in sorted(uniq, key=lambda m: -m.size)[:6]),
+            duplicated_detail=tuple(
+                (m.key, m.path.rsplit("/", 1)[-1], m.size, bool(m.sig),
+                 tuple(sorted(copy_dirs[m.key])))
+                for m in dup),
         ))
     results.sort(key=lambda r: -r.duplicated_bytes)
     return results
@@ -109,6 +119,14 @@ class MergeDecision:
     source_is_inbox: bool = False
     backlog_files: int = 0
     backlog_bytes: int = 0
+    # Files whose every other copy sits in a folder this plan also removes.
+    at_risk_files: int = 0
+    at_risk_bytes: int = 0
+    at_risk_examples: tuple[tuple[str, str], ...] = ()   # (filename, folder)
+    # How many of the shared files were compared byte-for-byte, versus
+    # matched only on MEGA's stored fingerprint.
+    verified_files: int = 0
+    fingerprint_only_files: int = 0
 
 
 def _preference(folder: str, prefer: Sequence[str]) -> int:
@@ -173,8 +191,32 @@ def merge_decisions(overlaps: Sequence[FolderOverlap],
             other_counterparts=tuple(
                 name for name, _, _ in source.counterparts[1:4]),
         ))
-    decisions.sort(key=lambda d: -d.shared_bytes)
-    return decisions
+    # A copy only counts as a survivor if its folder is not itself removed.
+    # Without this pass, two folders that back each other up could both be
+    # declared safe, and executing both would lose the files.
+    removed = {d.source for d in decisions if not d.source_is_inbox}
+    finished = []
+    for d in decisions:
+        src = index.get(d.source)
+        if src is None:
+            finished.append(d)
+            continue
+        at_risk = [(name, size, dirs) for _, name, size, verified, dirs
+                   in src.duplicated_detail
+                   if not any(other not in removed for other in dirs)]
+        verified = sum(1 for *_, v, _dirs in src.duplicated_detail if v)
+        finished.append(replace(
+            d,
+            at_risk_files=len(at_risk),
+            at_risk_bytes=sum(size for _, size, _ in at_risk),
+            at_risk_examples=tuple(
+                (name, next(iter(dirs)))
+                for name, _, dirs in sorted(at_risk, key=lambda r: -r[1])[:6]),
+            verified_files=verified,
+            fingerprint_only_files=len(src.duplicated_detail) - verified,
+        ))
+    finished.sort(key=lambda d: -d.shared_bytes)
+    return finished
 
 
 def chained_decisions(decisions: Sequence[MergeDecision]
@@ -256,6 +298,26 @@ def write_folder_plan(overlaps: Sequence[FolderOverlap], path: Path, *,
             f"({_human(d.must_move_bytes)})",
             "",
         ]
+        total = d.verified_files + d.fingerprint_only_files
+        if total:
+            evidence = (f"- evidence: {d.verified_files:,} of {total:,} shared "
+                        f"files byte-verified")
+            if d.fingerprint_only_files:
+                evidence += (f"; **{d.fingerprint_only_files:,} rest on the "
+                             f"fingerprint only** (wrong ~1 in 80) — run "
+                             f"`verify` before acting on those")
+            lines += [evidence, ""]
+        if d.at_risk_files:
+            lines += [
+                f"⚠️ **{d.at_risk_files:,} files ({_human(d.at_risk_bytes)}) "
+                f"here have their only other copy in a folder this plan is "
+                f"also removing.** Executing both decisions would lose them. "
+                f"Move these into `{d.destination}` first:",
+                "",
+            ]
+            lines += [f"  - `{name}` — other copy in `{folder}`"
+                      for name, folder in d.at_risk_examples]
+            lines.append("")
         if d.source_is_inbox:
             lines += [
                 f"`{d.source}` is an auto-sync inbox — it refills itself, so it "
@@ -270,9 +332,12 @@ def write_folder_plan(overlaps: Sequence[FolderOverlap], path: Path, *,
                 f"a backlog, not redundancy.",
                 "",
             ]
+        elif d.must_move_files == 0 and d.at_risk_files == 0:
+            lines += [f"**Safe to remove `{d.source}`** — nothing unique in it, "
+                      f"and every copy survives elsewhere.", ""]
         elif d.must_move_files == 0:
-            lines += [f"**Safe to remove `{d.source}`** — nothing unique in it.",
-                      ""]
+            lines += [f"**Remove `{d.source}` only after the at-risk files "
+                      f"above are moved.**", ""]
         else:
             lines += [
                 f"**Move {d.must_move_files:,} unique file"

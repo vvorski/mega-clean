@@ -224,3 +224,76 @@ def test_independent_decisions_are_not_flagged():
     decisions = merge_decisions(analyse_folders(clusters, a + b + c + d,
                                                 min_files=1))
     assert chained_decisions(decisions) == []
+
+
+def test_a_file_whose_only_copies_are_in_other_removed_folders_is_at_risk():
+    """'Safe because a copy exists elsewhere' is only true if that elsewhere
+    survives the plan. A copy in a folder that is also being removed is not
+    a survivor."""
+    from megaclean.folders import merge_decisions
+    # A and B hold the same three photos and nothing else. A -> B collapses A.
+    # B also holds three photos shared only with C, and C has unique content,
+    # so B -> C collapses B. The first three photos then exist nowhere.
+    ab = [n(f"A/{i}.jpg", size=10) for i in range(3)]
+    ba = [n(f"B/{i}.jpg", size=10) for i in range(3)]
+    bc = [n(f"B/x{i}.jpg", size=900) for i in range(3)]
+    cb = [n(f"C/x{i}.jpg", size=900) for i in range(3)]
+    c_only = [n(f"C/only{i}.jpg", size=5) for i in range(2)]
+    clusters = ([cluster(x, y) for x, y in zip(ab, ba)]
+                + [cluster(x, y) for x, y in zip(bc, cb)])
+    decisions = merge_decisions(
+        analyse_folders(clusters, ab + ba + bc + cb + c_only, min_files=1))
+    by_source = {d.source: d for d in decisions}
+    assert set(by_source) == {"A", "B"}
+    # Each decision warns about the files it would strand: both sides see
+    # the same three photos, because removing either side alone is fine but
+    # removing both is not.
+    assert by_source["A"].at_risk_files == 3
+    assert by_source["B"].at_risk_files == 3
+
+
+def test_a_copy_in_a_surviving_folder_is_not_at_risk():
+    from megaclean.folders import merge_decisions
+    a = [n(f"A/{i}.jpg") for i in range(3)]
+    b = [n(f"B/{i}.jpg") for i in range(3)]
+    b_only = [n("B/keep.jpg")]
+    decisions = merge_decisions(
+        analyse_folders([cluster(x, y) for x, y in zip(a, b)], a + b + b_only,
+                        min_files=1))
+    assert decisions[0].source == "A"
+    assert decisions[0].at_risk_files == 0
+
+
+def test_plan_names_at_risk_files_and_never_calls_the_folder_safe(tmp_path):
+    ab = [n(f"A/{i}.jpg", size=10) for i in range(3)]
+    ba = [n(f"B/{i}.jpg", size=10) for i in range(3)]
+    bc = [n(f"B/x{i}.jpg", size=900) for i in range(3)]
+    cb = [n(f"C/x{i}.jpg", size=900) for i in range(3)]
+    c_only = [n(f"C/only{i}.jpg", size=5) for i in range(2)]
+    clusters = ([cluster(x, y) for x, y in zip(ab, ba)]
+                + [cluster(x, y) for x, y in zip(bc, cb)])
+    overlaps = analyse_folders(clusters, ab + ba + bc + cb + c_only, min_files=1)
+    out = tmp_path / "p.md"
+    write_folder_plan(overlaps, out)
+    text = out.read_text()
+    assert "Safe to remove `A`" not in text
+    assert "also being removed" in text
+
+
+def test_plan_states_how_much_of_each_decision_is_byte_verified(tmp_path):
+    """Fingerprint-only evidence was wrong 1 time in 80; the reader must be
+    able to see which decisions rest on it."""
+    verified = [n(f"A/{i}.jpg", sig="v%d" % i) for i in range(2)]
+    verified_b = [n(f"B/{i}.jpg", sig="v%d" % i) for i in range(2)]
+    unverified = [n("A/u.jpg", sig="", node_id="ua"), n("B/u.jpg", sig="", node_id="ub")]
+    for x in unverified:
+        object.__setattr__(x, "crc", "CRC1")
+    clusters = ([cluster(x, y) for x, y in zip(verified, verified_b)]
+                + [Cluster("identical", tuple(unverified), unverified[0])])
+    overlaps = analyse_folders(clusters, verified + verified_b + unverified,
+                               min_files=1)
+    out = tmp_path / "p.md"
+    write_folder_plan(overlaps, out, prefer=("B",))
+    text = out.read_text()
+    assert "2 of 3" in text or "67%" in text
+    assert "fingerprint" in text.lower()
