@@ -212,3 +212,55 @@ def test_node_names_decrypts_names_for_folders_and_files():
              _make_file_node("n1", "f1", "a.jpg")]
     names = node_names(nodes, MASTER)
     assert names["f1"] == "Photos" and names["n1"] == "a.jpg"
+
+
+def test_decrypt_ctr_range_matches_a_reference_encryption():
+    """Handle-based downloads decrypt AES-CTR with nonce = key[16:24] and a
+    counter that starts at offset/16, so a ranged read must line up."""
+    from Crypto.Cipher import AES as _AES
+    from Crypto.Util import Counter
+    from megaclean.megaapi import attribute_key, decrypt_ctr
+    keyblob = bytes(range(32))
+    plain = bytes((i * 7) % 256 for i in range(5000))
+    k = attribute_key(keyblob)
+    ctr = Counter.new(64, prefix=keyblob[16:24], initial_value=0)
+    cipher = _AES.new(k, _AES.MODE_CTR, counter=ctr).encrypt(plain)
+    assert decrypt_ctr(cipher, keyblob, 0) == plain
+    off = 1024                                       # 16-byte aligned
+    assert decrypt_ctr(cipher[off:off + 700], keyblob, off) == plain[off:off + 700]
+
+
+def test_download_range_requests_g_then_gets_the_range():
+    calls = []
+    def poster(url, data, timeout):
+        calls.append(("post", json.loads(data)))
+        return [{"g": "https://dl.example/abc", "s": 5000}]
+    def getter(url, timeout):
+        calls.append(("get", url))
+        return b"\0" * 16
+    api = MegaApi("S", MASTER, poster=poster, getter=getter)
+    keyblob = bytes(range(32))
+    out = api.download_range("H1", keyblob, 32, 16)
+    assert calls[0] == ("post", [{"a": "g", "g": 1, "n": "H1"}])
+    assert calls[1][1] == "https://dl.example/abc/32-47"
+    assert len(out) == 16
+
+
+def test_handle_remote_reads_ranges_by_handle_not_path():
+    """When two folders share a name, a path is ambiguous; a handle is not."""
+    from Crypto.Cipher import AES as _AES
+    from Crypto.Util import Counter
+    from megaclean.megaapi import HandleRemote, attribute_key
+    keyblob = bytes(range(32))
+    plain = bytes((i * 3) % 256 for i in range(3000))
+    ctr = Counter.new(64, prefix=keyblob[16:24], initial_value=0)
+    cipher = _AES.new(attribute_key(keyblob), _AES.MODE_CTR, counter=ctr).encrypt(plain)
+    def poster(url, data, timeout):
+        return [{"g": "https://dl/x", "s": len(plain)}]
+    def getter(url, timeout):
+        lo, hi = map(int, url.rsplit("/", 1)[1].split("-"))
+        return cipher[lo:hi + 1]
+    api = MegaApi("S", MASTER, poster=poster, getter=getter)
+    remote = HandleRemote(api, {"H1": keyblob})
+    assert remote.read_range("H1", 0, 100) == plain[:100]
+    assert remote.read_range("H1", -100, 100) == plain[-100:]

@@ -215,6 +215,23 @@ def prune_missing(conn: sqlite3.Connection, scope: str, *,
     return len(stale)
 
 
+def ambiguous_dirs(conn: sqlite3.Connection, scope: str) -> set[str]:
+    """Directory paths backed by more than one folder node.
+
+    MEGA allows two folders with the same name in the same place. rclone
+    exposes only one of them, so any path-based read under such a directory
+    may return the wrong file; callers must read those nodes by handle.
+    """
+    rows = conn.execute(
+        "SELECT path, parent_id FROM nodes WHERE scope = ? AND parent_id IS NOT NULL",
+        (scope,))
+    seen: dict[str, set[str]] = {}
+    for r in rows:
+        folder = r["path"].rsplit("/", 1)[0] if "/" in r["path"] else "/"
+        seen.setdefault(folder, set()).add(r["parent_id"])
+    return {f for f, parents in seen.items() if len(parents) > 1}
+
+
 def clear_errors(conn: sqlite3.Connection, scope: str) -> int:
     cur = conn.execute(
         "UPDATE nodes SET error = NULL WHERE scope = ? AND error IS NOT NULL",

@@ -105,3 +105,15 @@ def test_prune_missing_drops_rows_for_nodes_a_rescan_no_longer_sees(conn):
     removed = prune_missing(conn, "remote", seen_ids={"h1"}, roots=("Photos",))
     assert removed == 1
     assert {r["node_id"] for r in iter_nodes(conn, "remote")} == {"h1", "h3"}
+
+
+def test_ambiguous_dirs_finds_directories_backed_by_two_folder_nodes(conn):
+    from megaclean.index import ambiguous_dirs, set_parent
+    upsert_node(conn, "remote", "Lib/Camera/a.jpg", 1, "t", node_id="a")
+    upsert_node(conn, "remote", "Lib/Camera/b.jpg", 1, "t", node_id="b")
+    upsert_node(conn, "remote", "Lib/Other/c.jpg", 1, "t", node_id="c")
+    set_parent(conn, "remote", "a", "folder1")
+    set_parent(conn, "remote", "b", "folder2")      # a second folder also named Camera
+    set_parent(conn, "remote", "c", "folder3")
+    conn.commit()
+    assert ambiguous_dirs(conn, "remote") == {"Lib/Camera"}

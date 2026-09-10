@@ -20,12 +20,12 @@ from .dupes import cluster_nodes, nodes_from_rows
 from .fingerprint import run_fingerprint
 from .folders import analyse_folders, write_folder_plan
 from .index import (
-    clear_errors, crc_group_ids, iter_nodes, open_index, pending_ids,
-    prune_missing, set_crc, set_parent, size_collision_ids, targets_for,
-    upsert_node,
+    ambiguous_dirs, clear_errors, crc_group_ids, iter_nodes, open_index,
+    pending_ids, prune_missing, set_crc, set_parent, size_collision_ids,
+    targets_for, upsert_node,
 )
 from .local import local_scope, scan_local
-from .megaapi import MegaApi, rubbish_handle, session_from_rclone
+from .megaapi import HandleRemote, MegaApi, rubbish_handle, session_from_rclone
 from .ops import build_operations, write_operations
 from .planner import build_plan, read_plan, write_plan
 from .previews import fetch_previews, preview_targets
@@ -109,12 +109,30 @@ def _cmd_verify(args, conn, make_remote) -> int:
         # gallery preview, so the pictures cost no extra transfer.
         def on_head(node_id, head, _root=thumb_root):
             write_thumbnail(_root, node_id, head)
+    # Files under a directory path that two folder nodes share cannot be read
+    # by path -- rclone would hand back whichever twin it exposes -- so those
+    # are read by handle through the API instead.
+    amb = ambiguous_dirs(conn, "remote")
+    by_handle = [(nid, nid, size) for nid, path, size in targets
+                 if (path.rsplit("/", 1)[0] if "/" in path else "/") in amb]
+    by_path = [t for t in targets if (t[1].rsplit("/", 1)[0] if "/" in t[1] else "/") not in amb]
     print(f"verifying {len(targets):,} files in fingerprint groups "
-          f"(workers={args.workers})"
+          f"(workers={args.workers}; {len(by_handle):,} by handle because "
+          f"their folder name is duplicated)"
           + (f", writing thumbnails to {thumb_root}" if thumb_root else ""))
-    with args.served_factory(args.remote) as remote:
-        ok, failed = run_fingerprint(conn, remote, "remote", targets,
-                                     workers=args.workers, on_head=on_head)
+    ok = failed = 0
+    if by_path:
+        with args.served_factory(args.remote) as remote:
+            o, f = run_fingerprint(conn, remote, "remote", by_path,
+                                   workers=args.workers, on_head=on_head)
+            ok += o; failed += f
+    if by_handle:
+        session_id, master_key = session_from_rclone(args.remote)
+        api = MegaApi(session_id, master_key)
+        hr = HandleRemote.from_tree(api, api.fetch_nodes())
+        o, f = run_fingerprint(conn, hr, "remote", by_handle,
+                               workers=min(args.workers, 6), on_head=on_head)
+        ok += o; failed += f
     print(f"verified {ok:,}, failed {failed:,}")
     return 0 if failed == 0 else 1
 

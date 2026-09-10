@@ -193,6 +193,21 @@ def node_names(nodes: Sequence[dict], master_key: bytes) -> dict[str, str]:
     return names
 
 
+def decrypt_ctr(data: bytes, keyblob: bytes, offset: int) -> bytes:
+    """Decrypt file bytes fetched from `offset` (16-byte aligned) with the
+    node's 32-byte key: AES-128-CTR, key = k0^k1, nonce = k[16:24]."""
+    from Crypto.Util import Counter
+    if offset % 16:
+        raise ValueError("offset must be a multiple of 16")
+    counter = Counter.new(64, prefix=keyblob[16:24], initial_value=offset // 16)
+    return AES.new(attribute_key(keyblob), AES.MODE_CTR, counter=counter).decrypt(data)
+
+
+def _get(url: str, timeout: int) -> bytes:
+    with urllib.request.urlopen(url, timeout=timeout) as response:
+        return response.read()
+
+
 def _post(url: str, data: bytes, timeout: int):
     request = urllib.request.Request(
         url, data=data, headers={"Content-Type": "application/json"})
@@ -202,11 +217,13 @@ def _post(url: str, data: bytes, timeout: int):
 
 class MegaApi:
     def __init__(self, session_id: str, master_key: bytes, *,
-                 endpoint: str = API_ENDPOINT, poster: Callable = _post) -> None:
+                 endpoint: str = API_ENDPOINT, poster: Callable = _post,
+                 getter: Callable = _get) -> None:
         self.session_id = session_id
         self.master_key = master_key
         self.endpoint = endpoint
         self._post = poster
+        self._get = getter
 
     def request(self, payload: list[dict]):
         url = f"{self.endpoint}?id={random.randint(0, 10 ** 9)}&sid={self.session_id}"
@@ -229,6 +246,28 @@ class MegaApi:
 
     def node_names(self, nodes: Sequence[dict]) -> dict[str, str]:
         return node_names(nodes, self.master_key)
+
+    def download_range(self, handle: str, keyblob: bytes, offset: int,
+                       count: int) -> bytes:
+        """Read `count` bytes at `offset` of a file BY HANDLE.
+
+        Unlike a path-based read through rclone, this is unambiguous when two
+        folders (or files) share a name, and it works on nodes in the bin.
+        """
+        reply = self.request([{"a": "g", "g": 1, "n": handle}])
+        entry = reply[0] if isinstance(reply, list) else reply
+        if not isinstance(entry, dict) or "g" not in entry:
+            raise RuntimeError(f"no download URL for {handle}: {entry}")
+        size = int(entry.get("s", 0))
+        if offset < 0:
+            offset = max(0, size + offset)
+        start = offset - (offset % 16)                  # CTR needs alignment
+        end = min(size, offset + count) - 1
+        if end < start:
+            return b""
+        raw = self._get(f"{entry['g']}/{start}-{end}", REQUEST_TIMEOUT_SECONDS)
+        plain = decrypt_ctr(raw, keyblob, start)
+        return plain[offset - start:offset - start + count]
 
     def move_to_rubbish(self, handles: Sequence[str], rubbish: str, *,
                         batch_size: int = 100) -> dict[str, int]:
@@ -279,3 +318,40 @@ def session_from_rclone(remote: str, runner: Callable = subprocess.run,
             f"rclone remote {remote!r} has no cached {' or '.join(missing)}; "
             f"run any rclone command against it once to establish a session")
     return config["session_id"], base64.b64decode(config["master_key"])
+
+
+class HandleRemote:
+    """A `Remote` whose read_range takes a node HANDLE where others take a path.
+
+    rclone addresses files by path, and MEGA allows two folders with the same
+    name, so a path can silently resolve to the wrong node. Reading by handle
+    cannot. Listing and upload are not supported here; this exists for
+    verification of files whose path is ambiguous.
+    """
+
+    def __init__(self, api: "MegaApi", keys: dict[str, bytes]) -> None:
+        self.api = api
+        self.keys = keys
+
+    @classmethod
+    def from_tree(cls, api: "MegaApi", nodes: Sequence[dict]) -> "HandleRemote":
+        master = AES.new(api.master_key, AES.MODE_ECB)
+        keys = {}
+        for n in nodes:
+            if n.get("t") == 0:
+                k = _node_key(n, master)
+                if k and len(k) >= 32:
+                    keys[n["h"]] = k
+        return cls(api, keys)
+
+    def read_range(self, handle: str, offset: int, count: int) -> bytes:
+        key = self.keys.get(handle)
+        if key is None:
+            raise RuntimeError(f"no key for node {handle}")
+        return self.api.download_range(handle, key, offset, count)
+
+    def list_files(self, root: str):
+        raise NotImplementedError("HandleRemote is read-only by handle")
+
+    def upload(self, local_path: str, dest_path: str) -> None:
+        raise NotImplementedError("HandleRemote is read-only by handle")
