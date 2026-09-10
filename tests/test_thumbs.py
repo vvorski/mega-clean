@@ -92,3 +92,25 @@ def test_embedded_exif_thumbnail_is_preferred(tmp_path, monkeypatch):
     monkeypatch.setattr(th, "embedded_thumbnail", lambda head: real)
     out = thumbnail_bytes(b"\xff\xd8" + b"\x00" * 1000, max_px=200)
     assert out is not None
+
+
+def test_large_variant_is_written_alongside(tmp_path):
+    from megaclean.thumbs import write_thumbnail, thumb_path
+    data = _photo(tmp_path / "a.jpg", size=(2000, 1500)).read_bytes()
+    root = tmp_path / "t"
+    assert write_thumbnail(root, "n1", data, also_large=True)
+    small = thumb_path(root, "n1")
+    large = thumb_path(root, "n1", large=True)
+    assert small.is_file() and large.is_file()
+    import io
+    assert max(Image.open(io.BytesIO(large.read_bytes())).size) > \
+           max(Image.open(io.BytesIO(small.read_bytes())).size)
+
+
+def test_large_is_optional(tmp_path):
+    from megaclean.thumbs import write_thumbnail, thumb_path
+    data = _photo(tmp_path / "a.jpg").read_bytes()
+    root = tmp_path / "t"
+    write_thumbnail(root, "n1", data)
+    assert thumb_path(root, "n1").is_file()
+    assert not thumb_path(root, "n1", large=True).is_file()

@@ -46,7 +46,8 @@ def preview_targets(clusters: Sequence[Cluster], thumb_root: Path, *,
         for member in members:
             if Path(member.path).suffix.lower() not in IMAGE_EXTENSIONS:
                 continue
-            if not force and thumb_path(thumb_root, member.key).is_file():
+            if not force and thumb_path(thumb_root, member.key,
+                                        large=True).is_file():
                 continue
             picked.append((member.key, member.path, member.size))
         if picked:
@@ -73,7 +74,8 @@ def fetch_previews(remote: Remote, targets: Sequence[tuple[str, str, int]],
             target = futures[future]
             try:
                 node_id, data = future.result()
-                if write_thumbnail(thumb_root, node_id, data):
+                # Whole-file bytes in hand: write the click-through image too.
+                if write_thumbnail(thumb_root, node_id, data, also_large=True):
                     ok += 1
                 else:
                     failed += 1

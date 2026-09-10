@@ -27,6 +27,8 @@ log = logging.getLogger(__name__)
 
 DEFAULT_MAX_PX = 200
 DEFAULT_QUALITY = 72
+LARGE_MAX_PX = 1400
+LARGE_QUALITY = 80
 
 
 GREY = 128
@@ -89,17 +91,24 @@ def thumbnail_bytes(head: bytes, *, max_px: int = DEFAULT_MAX_PX,
         return None
 
 
-def thumb_path(root: Path, node_id: str) -> Path:
-    """Sharded, filesystem-safe path for one node's thumbnail."""
+def thumb_path(root: Path, node_id: str, *, large: bool = False) -> Path:
+    """Sharded, filesystem-safe path for one node's preview."""
     digest = hashlib.sha1(node_id.encode("utf-8")).hexdigest()
-    return Path(root) / digest[:2] / f"{digest}.jpg"
+    suffix = ".large.jpg" if large else ".jpg"
+    return Path(root) / digest[:2] / f"{digest}{suffix}"
 
 
-def write_thumbnail(root: Path, node_id: str, head: bytes, **kwargs) -> bool:
+def write_thumbnail(root: Path, node_id: str, head: bytes, *,
+                    also_large: bool = False, **kwargs) -> bool:
+    """Write the grid thumbnail, and optionally the full-view image beside it."""
     data = thumbnail_bytes(head, **kwargs)
     if data is None:
         return False
     path = thumb_path(root, node_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
+    if also_large:
+        big = thumbnail_bytes(head, max_px=LARGE_MAX_PX, quality=LARGE_QUALITY)
+        if big is not None:
+            thumb_path(root, node_id, large=True).write_bytes(big)
     return True

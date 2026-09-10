@@ -46,12 +46,23 @@ def test_limit_takes_the_most_valuable_groups():
     assert targets[0][1] == "5.jpg"
 
 
-def test_existing_thumbnails_are_not_refetched(tmp_path):
+def test_existing_full_size_preview_is_not_refetched(tmp_path):
+    a, b = n("a.jpg"), n("b.jpg")
+    p = thumb_path(tmp_path, "a.jpg", large=True)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"x")
+    assert preview_targets([Cluster("exact", (a, b), a)], tmp_path) == []
+
+
+def test_grid_only_thumbnail_is_refetched_for_the_full_size_view(tmp_path):
+    """A 200px thumbnail made from a head buffer cannot serve the click-through
+    view, so those files are fetched again in full."""
     a, b = n("a.jpg"), n("b.jpg")
     p = thumb_path(tmp_path, "a.jpg")
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(b"x")
-    assert preview_targets([Cluster("exact", (a, b), a)], tmp_path) == []
+    assert [t[1] for t in preview_targets([Cluster("exact", (a, b), a)],
+                                          tmp_path)] == ["a.jpg"]
 
 
 def test_fetch_writes_thumbnails_from_full_bytes(tmp_path, make_jpeg):

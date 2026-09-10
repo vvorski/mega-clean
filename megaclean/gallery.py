@@ -27,10 +27,10 @@ def _wasted(cluster: Cluster) -> int:
 def build_payload(clusters: Sequence[Cluster], *,
                   thumbs_dir: Path | None = None,
                   thumb_rel: str = "thumbs") -> dict:
-    def rel_thumb(key):
+    def rel_thumb(key, large=False):
         if thumbs_dir is None:
             return None
-        candidate = thumb_path(thumbs_dir, key)
+        candidate = thumb_path(thumbs_dir, key, large=large)
         if not candidate.is_file():
             return None
         return f"{thumb_rel}/{candidate.parent.name}/{candidate.name}"
@@ -41,6 +41,8 @@ def build_payload(clusters: Sequence[Cluster], *,
         # stands in for all of them. Variants genuinely differ and never share.
         shared = (rel_thumb(cluster.keeper.key)
                   if cluster.kind != "variant" else None)
+        shared_large = (rel_thumb(cluster.keeper.key, large=True)
+                        if cluster.kind != "variant" else None)
         exact_labels = {}
         for i, group in enumerate(cluster.exact_groups, start=1):
             for member in group:
@@ -56,15 +58,21 @@ def build_payload(clusters: Sequence[Cluster], *,
                 "keep": m.key in cluster.keeper_keys,
                 "w": m.width,
                 "h": m.height,
+                "folder": m.parent_id,
             }
             if m.key in exact_labels:
                 entry["identical"] = exact_labels[m.key]
             own = rel_thumb(m.key)
+            own_large = rel_thumb(m.key, large=True)
             if own:
                 entry["thumb"] = own
             elif shared:
                 entry["thumb"] = shared
                 entry["shared_thumb"] = True
+            if own_large:
+                entry["large"] = own_large
+            elif shared_large:
+                entry["large"] = shared_large
             members.append(entry)
         groups.append({
             "kind": cluster.kind,
@@ -129,7 +137,29 @@ justify-content:center;overflow:hidden}
 .shot .none{color:var(--mut);font-size:11px}
 figcaption{padding:7px 8px;font-size:12px;min-width:0}
 .nm{font-weight:600;word-break:break-all}
-.dir{color:var(--mut);font-size:11px;word-break:break-all;margin-top:2px}
+.path{color:var(--mut);font-size:11px;word-break:break-all;margin-top:2px;
+line-height:1.35}
+.shot.clickable{cursor:zoom-in}
+.shot.clickable:hover{outline:2px solid var(--accent);outline-offset:-2px}
+#lb{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:50;display:none;
+flex-direction:column}
+#lb.open{display:flex}
+#lbtop{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 14px;
+color:#f2f2f0;background:rgba(0,0,0,.55);font-size:13px}
+#lbtop .fp{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;
+word-break:break-all;flex:1;min-width:200px}
+#lbtop a,#lbtop button{color:#f2f2f0;background:rgba(255,255,255,.12);
+border:1px solid rgba(255,255,255,.25);border-radius:6px;padding:5px 10px;
+text-decoration:none;font-size:12px;cursor:pointer;white-space:nowrap}
+#lbtop a:hover,#lbtop button:hover{background:rgba(255,255,255,.24)}
+#lbbody{flex:1;display:flex;align-items:center;justify-content:center;padding:12px;
+min-height:0}
+#lbbody img{max-width:100%;max-height:100%;object-fit:contain;display:block}
+#lbfoot{padding:8px 14px 14px;color:#c9c9c4;font-size:12px;text-align:center}
+.navbtn{position:absolute;top:50%;transform:translateY(-50%);font-size:26px;
+padding:10px 15px;background:rgba(255,255,255,.12);color:#fff;border:0;
+cursor:pointer;border-radius:8px}
+#lbprev{left:12px}#lbnext{right:12px}
 .meta{margin-top:4px;color:var(--mut);font-variant-numeric:tabular-nums}
 .badge{display:inline-block;font-size:10px;padding:0 5px;border-radius:3px;
 margin-right:4px;text-transform:uppercase;letter-spacing:.04em}
@@ -169,6 +199,20 @@ margin-right:4px;text-transform:uppercase;letter-spacing:.04em}
     <button id="next2">next &rarr;</button>
   </div>
 </main>
+<div id="lb" role="dialog" aria-modal="true">
+  <div id="lbtop">
+    <span class="fp" id="lbpath"></span>
+    <button id="lbcopy" title="Copy the full path">copy path</button>
+    <a id="lbfolder" target="_blank" rel="noopener">open folder in MEGA</a>
+    <button id="lbclose">close &times;</button>
+  </div>
+  <div id="lbbody">
+    <button class="navbtn" id="lbprev">&lsaquo;</button>
+    <img id="lbimg" alt="">
+    <button class="navbtn" id="lbnext">&rsaquo;</button>
+  </div>
+  <div id="lbfoot"></div>
+</div>
 <script type="application/json" id="data">__DATA__</script>
 <script>
 const DATA = JSON.parse(document.getElementById('data').textContent);
@@ -209,7 +253,7 @@ function render(){
   const pages = Math.max(1, Math.ceil(view.length / PER));
   page = Math.min(page, pages - 1);
   const slice = view.slice(page*PER, page*PER + PER);
-  el('list').innerHTML = slice.length ? slice.map(g => `
+  el('list').innerHTML = slice.length ? slice.map((g, gi) => `
     <section class="group">
       <div class="ghead">
         <span class="waste">${gb(g.wasted)} reclaimable</span>
@@ -217,7 +261,7 @@ function render(){
           : g.kind === 'identical' ? 'fingerprint only' : 'variant'}</span>
         <span class="stats">${g.count} copies</span>
       </div>
-      <div class="files">${g.members.map(m => `
+      <div class="files">${g.members.map((m, mi) => `
         <figure>
           <div class="shot">${m.thumb
             ? `<img loading="lazy" src="${esc(m.thumb)}" alt="">`
@@ -237,6 +281,58 @@ function render(){
   el('pos').textContent = label; el('pos2').textContent = label;
   window.scrollTo({top:0});
 }
+let lbGroup = null, lbIndex = 0;
+function openLb(gi, mi){
+  const slice = view.slice(page*PER, page*PER + PER);
+  lbGroup = slice[gi]; lbIndex = mi; showLb();
+}
+function showLb(){
+  if (!lbGroup) return;
+  const m = lbGroup.members[lbIndex];
+  const img = el('lbimg');
+  // Fall back to the grid thumbnail when no full-size image was fetched.
+  img.src = m.large || m.thumb || '';
+  img.alt = m.name;
+  el('lbpath').textContent = m.path;
+  const folder = el('lbfolder');
+  if (m.folder){ folder.href = 'https://mega.nz/fm/' + m.folder; folder.style.display=''; }
+  else folder.style.display = 'none';
+  el('lbfoot').textContent =
+    `${m.keep ? 'keeper' : 'duplicate'} \u00b7 ${gb(m.size)}`
+    + (m.w ? ` \u00b7 ${m.w}\u00d7${m.h}` : '')
+    + (m.large ? '' : ' \u00b7 full-size image not fetched (run: megaclean previews)')
+    + ` \u00b7 ${lbIndex+1} of ${lbGroup.members.length} in this group`;
+  el('lb').classList.add('open');
+}
+function closeLb(){ el('lb').classList.remove('open'); lbGroup = null; }
+function stepLb(d){
+  if (!lbGroup) return;
+  lbIndex = (lbIndex + d + lbGroup.members.length) % lbGroup.members.length;
+  showLb();
+}
+el('list').addEventListener('click', e => {
+  const shot = e.target.closest('.shot.clickable');
+  if (!shot) return;
+  const fig = shot.closest('figure');
+  openLb(+fig.dataset.g, +fig.dataset.m);
+});
+el('lbclose').onclick = closeLb;
+el('lbprev').onclick = e => { e.stopPropagation(); stepLb(-1); };
+el('lbnext').onclick = e => { e.stopPropagation(); stepLb(1); };
+el('lb').addEventListener('click', e => { if (e.target.id === 'lb' || e.target.id === 'lbbody') closeLb(); });
+el('lbcopy').onclick = async () => {
+  try { await navigator.clipboard.writeText(el('lbpath').textContent);
+        el('lbcopy').textContent = 'copied'; }
+  catch { el('lbcopy').textContent = 'copy failed'; }
+  setTimeout(() => el('lbcopy').textContent = 'copy path', 1200);
+};
+document.addEventListener('keydown', e => {
+  if (!el('lb').classList.contains('open')) return;
+  if (e.key === 'Escape') closeLb();
+  else if (e.key === 'ArrowLeft') stepLb(-1);
+  else if (e.key === 'ArrowRight') stepLb(1);
+});
+
 for (const id of ['prev','prev2']) el(id).onclick = () => { page--; render(); };
 for (const id of ['next','next2']) el(id).onclick = () => { page++; render(); };
 el('q').oninput = apply; el('kind').onchange = apply; el('sort').onchange = apply;
@@ -267,11 +363,18 @@ def write_gallery(clusters: Sequence[Cluster], out_dir: Path, *,
     if thumbs_dir is not None:
         dest = out_dir / "thumbs"
         linked = 0
+        wanted = []
         for member in (m for g in payload["groups"] for m in g["members"]):
-            rel = member.get("thumb")
-            if not rel:
-                continue
-            source = thumb_path(thumbs_dir, member["id"])
+            for field, large in (("thumb", False), ("large", True)):
+                rel = member.get(field)
+                if rel and not member.get("shared_thumb"):
+                    wanted.append((rel, large, member["id"]))
+                elif rel:
+                    # A shared picture belongs to the group's keeper.
+                    wanted.append((rel, large, None))
+        for rel, large, owner in wanted:
+            source = (thumb_path(thumbs_dir, owner, large=large) if owner
+                      else Path(thumbs_dir) / Path(rel).parent.name / Path(rel).name)
             target = out_dir / rel
             if target.exists():
                 continue

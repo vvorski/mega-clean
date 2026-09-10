@@ -124,3 +124,51 @@ def test_variant_members_never_share_a_picture(tmp_path):
     members = {m["id"]: m for m in payload["groups"][0]["members"]}
     assert members["h1"].get("thumb")
     assert not members["h2"].get("thumb")
+
+
+def test_members_carry_the_full_path_and_a_mega_link(tmp_path):
+    a = Node(path="Victor's Life Photos/2024/a.jpg", size=10, sig="s",
+             exif_key=None, phash=None, phash_src=None, width=None,
+             height=None, mtime="t", node_id="h1", parent_id="folderX")
+    b = Node(path="Camera uploads/a.jpg", size=10, sig="s", exif_key=None,
+             phash=None, phash_src=None, width=None, height=None, mtime="t",
+             node_id="h2", parent_id="folderY")
+    m = build_payload([Cluster("exact", (a, b), a)])["groups"][0]["members"]
+    by_id = {x["id"]: x for x in m}
+    assert by_id["h1"]["path"] == "Victor's Life Photos/2024/a.jpg"
+    assert by_id["h1"]["folder"] == "folderX"
+    assert by_id["h2"]["folder"] == "folderY"
+
+
+def test_large_image_is_offered_when_present(tmp_path):
+    from megaclean.thumbs import thumb_path
+    thumbs = tmp_path / "thumbs"
+    for large in (False, True):
+        p = thumb_path(thumbs, "h1", large=large)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"\xff\xd8\xff")
+    a = n("a.jpg", 500, "same", node_id="h1")
+    b = n("b.jpg", 500, "same", node_id="h2")
+    payload = build_payload([Cluster("exact", (a, b), a)], thumbs_dir=thumbs)
+    members = {x["id"]: x for x in payload["groups"][0]["members"]}
+    assert members["h1"]["large"].endswith(".large.jpg")
+    # Identical members share the picture, so the full view works for both.
+    assert members["h2"]["large"] == members["h1"]["large"]
+
+
+def test_large_files_are_copied_into_the_gallery(tmp_path):
+    from megaclean.thumbs import thumb_path
+    thumbs = tmp_path / "thumbs"
+    for large in (False, True):
+        p = thumb_path(thumbs, "h1", large=large)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"\xff\xd8\xff")
+    a = n("x/a.jpg", 500, "same", node_id="h1")
+    b = n("y/a.jpg", 500, "same", node_id="h2")
+    out = tmp_path / "report"
+    write_gallery([Cluster("exact", (a, b), a)], out, thumbs_dir=thumbs)
+    import json
+    payload = json.loads((out / "index.html").read_text()
+                         .split('id="data">')[1].split("</script>")[0])
+    large_rel = payload["groups"][0]["members"][0]["large"]
+    assert (out / large_rel).is_file()
