@@ -32,9 +32,57 @@ for rather than streaming the whole file.
 ## Finding duplicates
 
 ```bash
-megaclean scan-remote --remote mega --root Photos      # free: paths and sizes
-megaclean fingerprint --remote mega --scope collisions # cheap: exact duplicates
-megaclean dupes --out report.html --csv report.csv
+megaclean scan-fingerprints --remote mega --root Photos   # ~25s for 85k files
+megaclean dupes --out report.html --csv report.csv --gallery report/
+```
+
+`scan-fingerprints` reads MEGA's own content fingerprint out of the account's
+metadata: one API call returns the whole node tree, and every file node carries
+a CRC its uploading client computed. No file bytes are fetched, so an 85,000
+file account is grouped in under half a minute.
+
+That fingerprint is a *sparse* CRC — it samples blocks rather than hashing
+everything. Measured against a real account it agreed with the bytes 79 times
+in 80. Groups found this way are reported as **fingerprint only**; confirm them
+before acting:
+
+```bash
+megaclean verify --remote mega --workers 12       # reads bytes, ~3.5 files/s
+```
+
+Verified groups are re-reported as **byte-verified**. Verification is
+resumable: interrupt it and re-run.
+
+### The gallery
+
+`--gallery DIR` writes a browsable page: groups ranked by reclaimable space,
+filterable by path and kind, with pictures. Fetch the pictures first:
+
+```bash
+megaclean previews --remote mega --limit 500      # ~2 GB for the top 500 groups
+```
+
+One image is fetched per identical group, since its members are the same file;
+variant groups fetch every member because those genuinely differ. `--limit`
+takes the groups with the most reclaimable space, so a bounded transfer buys
+the most useful pictures.
+
+### What "duplicate" means here, precisely
+
+Redundancy is only ever counted **inside a byte-identical subgroup**. A variant
+cluster says "these are the same shot", which for a burst sequence means
+several *different* photographs — so each distinct picture keeps a copy. One
+real group held 9 files that were 3 distinct frames with 3 identical copies
+each; only 6 of the 9 are removable, not 8.
+
+### The older, byte-level path
+
+`scan-remote` plus `fingerprint` still exist and need no MEGA-specific
+metadata, at the cost of fetching 64 KB per candidate file:
+
+```bash
+megaclean scan-remote --remote mega --root Photos
+megaclean fingerprint --remote mega --scope collisions
 ```
 
 `--scope collisions` only inspects files whose byte size collides with another
@@ -53,7 +101,7 @@ megaclean dupes --out report.html
 Both are resumable: interrupt them and re-run, and they pick up what is still
 pending. `--retry` re-attempts files that errored.
 
-### Why fingerprinting runs a server
+### Why byte-reading runs a server
 
 rclone's mega backend reloads the account's entire node tree every time the
 process starts — about 16 seconds on an 80k-file account — so one `rclone cat`
