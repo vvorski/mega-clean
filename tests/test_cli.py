@@ -172,3 +172,20 @@ def test_dupes_writes_a_gallery(tmp_path, factory):
     html = (gallery / "index.html").read_text()
     assert "Photos/a.jpg" in html
     assert "duplicate groups" in html.lower()
+
+
+def test_verify_retry_clears_previous_errors(tmp_path, factory, account):
+    from megaclean.index import set_error, set_crc
+    db = tmp_path / "i.db"
+    main(["--db", str(db), "scan-remote", "--remote", "mega", "--root",
+          "Photos"], remote_factory=factory)
+    conn = open_index(db)
+    for r in iter_nodes(conn, "remote"):
+        set_crc(conn, "remote", r["node_id"], "same")
+        set_error(conn, "remote", r["node_id"], "timed out")
+    conn.commit(); conn.close()
+    assert main(["--db", str(db), "verify", "--remote", "mega", "--retry"],
+                remote_factory=factory) == 0
+    rows = list(iter_nodes(open_index(db), "remote"))
+    assert all(r["error"] is None for r in rows)
+    assert all(r["sig"] for r in rows)

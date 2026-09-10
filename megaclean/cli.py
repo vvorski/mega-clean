@@ -84,6 +84,8 @@ def _cmd_verify(args, conn, make_remote) -> int:
     account, so anything you intend to act on should be checked against the
     files themselves.
     """
+    if args.retry:
+        print(f"cleared {clear_errors(conn, 'remote')} previous errors")
     candidates = crc_group_ids(conn, "remote")
     node_ids = pending_ids(conn, "remote", candidates)
     if not node_ids:
@@ -377,6 +379,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--thumbs", default=None,
                    help="also write gallery thumbnails to this directory, "
                         "reusing the bytes already fetched")
+    p.add_argument("--retry", action="store_true",
+                   help="re-attempt files that previously errored")
     p.set_defaults(func=_cmd_verify)
 
     p = sub.add_parser("plan-bin",
