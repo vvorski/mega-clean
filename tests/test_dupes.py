@@ -240,3 +240,23 @@ def test_prefer_never_overrides_image_quality():
     big = node("Camera uploads/a.jpg", sig="B", exif_key="k", width=900, height=900)
     keeper = choose_keeper([small, big], prefer=("Library",))
     assert keeper.path == "Camera uploads/a.jpg"
+
+
+def test_keeper_avoids_a_folder_that_is_being_removed():
+    """If the folder plan removes a folder, no copy inside it may be the one
+    that survives — otherwise the two plans contradict each other."""
+    a = node("Doomed/a.jpg", sig="same")
+    b = node("Deep/nested/far/a.jpg", sig="same")
+    assert choose_keeper([a, b]).path == "Doomed/a.jpg"          # depth wins
+    assert choose_keeper([a, b], avoid=("Doomed",)).path == "Deep/nested/far/a.jpg"
+
+
+def test_avoid_ranks_above_prefer_but_below_quality():
+    small_pref = node("Lib/a.jpg", sig="A", exif_key="k", width=10, height=10)
+    big_doomed = node("Doomed/a.jpg", sig="B", exif_key="k", width=900, height=900)
+    assert choose_keeper([small_pref, big_doomed], prefer=("Lib",),
+                         avoid=("Doomed",)).path == "Doomed/a.jpg"
+    same_a = node("Lib/x.jpg", sig="same")
+    same_b = node("Doomed/x.jpg", sig="same")
+    assert choose_keeper([same_a, same_b], prefer=("Doomed",),
+                         avoid=("Doomed",)).path == "Lib/x.jpg"

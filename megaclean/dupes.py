@@ -52,11 +52,12 @@ class Cluster:
         return tuple(groups)
 
     prefer: tuple[str, ...] = ()
+    avoid: tuple[str, ...] = ()
 
     @property
     def keeper_keys(self) -> frozenset[str]:
         """One keeper per distinct content; everything else is truly redundant."""
-        return frozenset(choose_keeper(list(g), self.prefer).key
+        return frozenset(choose_keeper(list(g), self.prefer, self.avoid).key
                          for g in self.content_groups)
 
     @property
@@ -135,14 +136,18 @@ class _UnionFind:
             self.parent[rb] = ra
 
 
-def choose_keeper(nodes: Sequence[Node],
-                  prefer: Sequence[str] = ()) -> Node:
+def choose_keeper(nodes: Sequence[Node], prefer: Sequence[str] = (),
+                  avoid: Sequence[str] = ()) -> Node:
     """Which copy to keep: largest pixels, then bytes, then oldest, then shallowest.
 
     `prefer` lists path prefixes of canonical folders, best first. It ranks
     below image quality on purpose -- a bigger version of a photo is the better
     copy wherever it happens to sit -- but above path depth, so a curated
     library beats a shallower auto-sync inbox.
+
+    `avoid` lists folders a folder-level plan is removing. A copy inside one
+    of those must not be the survivor, or the file plan and the folder plan
+    would contradict each other. It ranks above `prefer`, below quality.
     """
     def preference(n: Node) -> int:
         for i, prefix in enumerate(prefer):
@@ -150,9 +155,12 @@ def choose_keeper(nodes: Sequence[Node],
                 return i
         return len(prefer)
 
+    def doomed(n: Node) -> int:
+        return 1 if any(n.path.startswith(a) for a in avoid) else 0
+
     def rank(n: Node):
         area = (n.width or 0) * (n.height or 0)
-        return (-area, -n.size, preference(n), n.mtime or "",
+        return (-area, -n.size, doomed(n), preference(n), n.mtime or "",
                 n.path.count("/"), n.path, n.key)
     return min(nodes, key=rank)
 
@@ -177,7 +185,8 @@ def _kind_of(members: Sequence[Node]) -> str:
 
 
 def cluster_nodes(nodes: Sequence[Node], *, phash_threshold: int = 6,
-                  prefer: Sequence[str] = ()) -> list[Cluster]:
+                  prefer: Sequence[str] = (),
+                  avoid: Sequence[str] = ()) -> list[Cluster]:
     uf = _UnionFind()
     for n in nodes:
         uf.find(n.key)
@@ -218,8 +227,8 @@ def cluster_nodes(nodes: Sequence[Node], *, phash_threshold: int = 6,
         members.sort(key=lambda n: (n.path, n.key))
         kind = _kind_of(members)
         clusters.append(Cluster(kind=kind, members=tuple(members),
-                                keeper=choose_keeper(members, prefer),
-                                prefer=tuple(prefer)))
+                                keeper=choose_keeper(members, prefer, avoid),
+                                prefer=tuple(prefer), avoid=tuple(avoid)))
     clusters.sort(key=lambda c: (c.kind, c.members[0].path))
     return clusters
 

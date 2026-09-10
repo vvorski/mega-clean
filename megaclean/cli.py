@@ -23,6 +23,7 @@ from .index import (
 )
 from .local import local_scope, scan_local
 from .megaapi import MegaApi, rubbish_handle, session_from_rclone
+from .ops import build_operations, write_operations
 from .planner import build_plan, read_plan, write_plan
 from .previews import fetch_previews, preview_targets
 from .remote import RcloneRemote, Remote, join_remote_path
@@ -185,6 +186,28 @@ def _cmd_bin(args, conn, make_remote) -> int:
     print("Files are in the Rubbish Bin and recoverable until you empty it. "
           "Re-run scan-fingerprints to refresh the index.")
     return 0 if result.failed == 0 else 1
+
+
+def _cmd_plan_ops(args, conn, make_remote) -> int:
+    """Every operation the full cleanup would perform, in order, for review."""
+    nodes = nodes_from_rows(iter_nodes(conn, "remote"))
+    if not nodes:
+        print("nothing indexed — run scan-fingerprints first", file=sys.stderr)
+        return 1
+    ops = build_operations(nodes, prefer=tuple(args.prefer),
+                           inbox=tuple(args.inbox), min_files=args.min_files,
+                           min_coverage=args.min_coverage,
+                           phash_threshold=args.threshold)
+    write_operations(ops, Path(args.out))
+    from collections import Counter
+    c = Counter(o.kind for o in ops)
+    b = Counter()
+    for o in ops:
+        b[o.kind] += o.size
+    for kind in ("MOVE", "BIN", "REMOVE_FOLDER", "CONFLICT"):
+        print(f"  {kind:14s} {c[kind]:>6,}   {b[kind] / 1e9:6.2f} GB")
+    print(f"written: {args.out}.md (review), {args.out}.csv, {args.out}.json")
+    return 0
 
 
 def _cmd_folders(args, conn, make_remote) -> int:
@@ -404,6 +427,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=None,
                    help="only the first N entries (for a trial batch)")
     p.set_defaults(func=_cmd_bin)
+
+    p = sub.add_parser("plan-ops",
+                       help="full operations manifest, in execution order")
+    p.add_argument("--out", default="ops",
+                   help="base name; writes .md, .csv and .json")
+    p.add_argument("--prefer", action="append", default=[])
+    p.add_argument("--inbox", action="append", default=[])
+    p.add_argument("--min-files", type=int, default=10)
+    p.add_argument("--min-coverage", type=float, default=0.5)
+    p.add_argument("--threshold", type=int, default=6)
+    p.set_defaults(func=_cmd_plan_ops)
 
     p = sub.add_parser("folders",
                        help="folder-level cleanup plan (collapse decisions)")
