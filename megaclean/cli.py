@@ -23,6 +23,7 @@ from .local import local_scope, scan_local
 from .megaapi import MegaApi, session_from_rclone
 from .planner import build_plan, read_plan, write_plan
 from .remote import RcloneRemote, Remote, join_remote_path
+from .gallery import write_gallery
 from .report import summarize, write_csv, write_html
 from .served import ServedRemote
 from .thumbs import write_thumbnail
@@ -142,6 +143,12 @@ def _cmd_dupes(args, conn, make_remote) -> int:
     write_html(clusters, Path(args.out))
     if args.csv:
         write_csv(clusters, Path(args.csv))
+    if args.gallery:
+        thumbs = Path(args.thumbs) if args.thumbs else None
+        if thumbs is not None and not thumbs.is_dir():
+            thumbs = None
+        index = write_gallery(clusters, Path(args.gallery), thumbs_dir=thumbs)
+        print(f"gallery written to {index}")
     stats = summarize(clusters)
     print(f"{stats['clusters']} clusters "
           f"({stats['exact_clusters']} exact, "
@@ -260,6 +267,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--csv", default=None)
     p.add_argument("--threshold", type=int, default=6,
                    help="perceptual hash Hamming distance")
+    p.add_argument("--gallery", default=None,
+                   help="also write a browsable gallery into this directory")
+    p.add_argument("--thumbs", default=".megaclean/thumbs",
+                   help="thumbnail directory produced by verify --thumbs")
     p.set_defaults(func=_cmd_dupes)
 
     p = sub.add_parser("scan-local", help="index a local folder")

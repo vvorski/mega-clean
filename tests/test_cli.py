@@ -156,3 +156,19 @@ def test_fingerprint_cat_transport_still_works(tmp_path, factory):
                 remote_factory=factory) == 0
     rows = {r["path"]: r for r in iter_nodes(open_index(db), "remote")}
     assert all(r["sig"] for r in rows.values())
+
+
+def test_dupes_writes_a_gallery(tmp_path, factory):
+    db = tmp_path / "i.db"
+    main(["--db", str(db), "scan-remote", "--remote", "mega", "--root",
+          "Photos"], remote_factory=factory)
+    main(["--db", str(db), "fingerprint", "--remote", "mega", "--root",
+          "Photos", "--scope", "all", "--transport", "cat"],
+         remote_factory=factory)
+    gallery = tmp_path / "gal"
+    assert main(["--db", str(db), "dupes", "--out", str(tmp_path / "r.html"),
+                 "--gallery", str(gallery), "--thumbs", str(tmp_path / "none")],
+                remote_factory=factory) == 0
+    html = (gallery / "index.html").read_text()
+    assert "Photos/a.jpg" in html
+    assert "duplicate groups" in html.lower()
