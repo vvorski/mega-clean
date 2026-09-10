@@ -71,16 +71,28 @@ def test_range_read_error_is_reported():
     assert not check.ok
 
 
-def test_no_deletion_capability_exists_in_the_package():
-    """The no-delete property is enforced by the codebase, not by a default."""
-    # Matches code, not prose: rclone's destructive subcommands as they would
-    # appear in an argv list, and Python's removal calls.
+def test_no_permanent_deletion_capability_exists_in_the_package():
+    """The tool may move files to MEGA's Rubbish Bin (reversible) and nothing
+    more. Permanent deletion, bin-emptying, and local file removal must not
+    exist anywhere in the codebase. Enforced by the code, not by a default."""
     forbidden = re.compile(
-        r"""["'](?:delete|deletefile|purge|rmdir|rmdirs)["']"""
+        # rclone's destructive subcommands, as argv strings
+        r"""["'](?:delete|deletefile|purge|rmdir|rmdirs|cleanup)["']"""
+        # MEGA API permanent delete: {"a": "d", ...}
+        r"""|["']a["']\s*:\s*["']d["']"""
+        r"""|hard_delete"""
+        # local removal
         r"""|\bos\.remove\(|\bos\.unlink\(|\bshutil\.rmtree\("""
         r"""|\.unlink\(|\bmega-rm\b"""
     )
     package = pathlib.Path(__file__).resolve().parent.parent / "megaclean"
     offenders = [f.name for f in package.glob("*.py")
                  if forbidden.search(f.read_text())]
-    assert offenders == [], f"deletion capability found in: {offenders}"
+    assert offenders == [], f"permanent deletion found in: {offenders}"
+
+
+def test_the_guard_actually_catches_a_permanent_delete(tmp_path):
+    """A guard that cannot fail is no guard."""
+    forbidden = re.compile(r"""["']a["']\s*:\s*["']d["']""")
+    assert forbidden.search('payload = [{"a": "d", "n": h}]')
+    assert not forbidden.search('payload = [{"a": "m", "n": h, "t": bin}]')

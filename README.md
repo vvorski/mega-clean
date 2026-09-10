@@ -1,8 +1,10 @@
 # mega-clean
 
 Review duplicates in a MEGA photo library and upload only the local photos that
-are not already there. **This tool never deletes anything** — `dupes` writes a
-report, `upload` only creates.
+are not already there. **This tool never permanently deletes anything.** The
+one destructive-looking action it has, `bin`, moves files to MEGA's Rubbish
+Bin from a plan you have reviewed — reversible until *you* empty the bin, which
+the tool cannot do. A test enforces that no permanent-delete code exists.
 
 ## Why it works the way it does
 
@@ -140,6 +142,22 @@ Every entry carries one of three actions:
 Note that `plan-upload` can only recognise a re-encoded copy already in MEGA if
 `fingerprint --scope all` has been run at least once. With only the cheap scope,
 a local photo is compared against remote files that share its exact byte size.
+
+## Reclaiming space
+
+```bash
+megaclean plan-bin --remote mega --prefer "Library" --only-under "Camera uploads"
+# read bin-plan.json: every file lists the copy that survives it
+megaclean bin --plan bin-plan.json --dry-run
+megaclean bin --plan bin-plan.json --limit 25      # trial batch
+megaclean bin --plan bin-plan.json
+```
+
+Two invariants hold at planning time and again at execution: nothing in a plan
+is ever a keeper (so nothing binned is the last copy), and only byte-verified
+copies qualify unless you pass `--allow-unverified`. Then the habit that makes
+the residual risk irrelevant: **leave the Rubbish Bin alone for a month**
+before emptying it.
 
 ## Tests
 

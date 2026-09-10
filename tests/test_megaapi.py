@@ -140,3 +140,55 @@ def test_node_paths_records_the_parent_handle():
     ]
     f = node_paths(nodes, MASTER)[0]
     assert f.parent == "f1"      # lets the report link to the containing folder
+
+
+def test_rubbish_handle_is_the_type_4_root():
+    nodes = [{"h": "cloud", "p": None, "t": 2}, {"h": "inbox", "p": None, "t": 3},
+             {"h": "bin", "p": None, "t": 4}]
+    from megaclean.megaapi import rubbish_handle
+    assert rubbish_handle(nodes) == "bin"
+
+
+def test_move_to_rubbish_sends_one_move_command_per_node_in_batches():
+    calls = []
+
+    def poster(url, data, timeout):
+        payload = json.loads(data)
+        calls.append(payload)
+        return [0] * len(payload)          # MEGA answers 0 per succeeded command
+
+    api = MegaApi("SESSION", MASTER, poster=poster)
+    results = api.move_to_rubbish(["h1", "h2", "h3"], "bin", batch_size=2)
+    assert calls[0] == [{"a": "m", "n": "h1", "t": "bin"},
+                        {"a": "m", "n": "h2", "t": "bin"}]
+    assert calls[1] == [{"a": "m", "n": "h3", "t": "bin"}]
+    assert results == {"h1": 0, "h2": 0, "h3": 0}
+
+
+def test_move_to_rubbish_reports_per_node_failures_without_raising():
+    def poster(url, data, timeout):
+        return [0, -9]                     # second node: not found
+
+    api = MegaApi("SESSION", MASTER, poster=poster)
+    results = api.move_to_rubbish(["ok", "gone"], "bin", batch_size=10)
+    assert results == {"ok": 0, "gone": -9}
+
+
+def test_move_to_rubbish_never_targets_anything_but_the_bin():
+    """Moving to an arbitrary folder is not deletion; this API is only ever
+    allowed to move into the Rubbish Bin, so a caller cannot misuse it."""
+    api = MegaApi("SESSION", MASTER, poster=lambda *a, **k: [0])
+    with pytest.raises(ValueError):
+        api.move_to_rubbish(["h1"], "")
+
+
+def test_nodes_in_the_rubbish_bin_are_not_indexed():
+    """Once a copy is binned it must stop counting as a copy, or the next scan
+    would call the survivor redundant against a file in the bin."""
+    nodes = [
+        {"h": "cloud", "p": None, "t": 2},
+        {"h": "bin", "p": None, "t": 4},
+        _make_file_node("live", "cloud", "a.jpg", fingerprint=b64encode(bytes(19))),
+        _make_file_node("dead", "bin", "a.jpg", fingerprint=b64encode(bytes(19))),
+    ]
+    assert [f.handle for f in node_paths(nodes, MASTER)] == ["live"]

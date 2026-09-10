@@ -26,6 +26,7 @@ from Crypto.Cipher import AES
 log = logging.getLogger(__name__)
 
 API_ENDPOINT = "https://g.api.mega.co.nz/cs"
+RUBBISH_TYPE = 4
 CRC_BYTES = 16
 REQUEST_TIMEOUT_SECONDS = 300
 
@@ -129,10 +130,24 @@ def node_paths(nodes: Sequence[dict], master_key: bytes) -> list[MegaFile]:
             seen += 1
         return "/".join(reversed(parts)) if parts else None
 
+    def root_type(handle: str) -> int | None:
+        seen = 0
+        while handle in by_handle and seen < 64:
+            node = by_handle[handle]
+            parent = node.get("p")
+            if parent not in by_handle:
+                return node.get("t")
+            handle = parent
+            seen += 1
+        return None
+
     files = []
-    skipped = 0
+    skipped = binned = 0
     for node in nodes:
         if node.get("t") != 0:
+            continue
+        if root_type(node["h"]) == RUBBISH_TYPE:
+            binned += 1          # already in the bin: no longer a live copy
             continue
         decoded = attrs.get(node["h"])
         if decoded is None:
@@ -153,7 +168,18 @@ def node_paths(nodes: Sequence[dict], master_key: bytes) -> list[MegaFile]:
         ))
     if skipped:
         log.info("skipped %d nodes we hold no key for (inbound shares)", skipped)
+    if binned:
+        log.info("ignored %d files already in the Rubbish Bin", binned)
     return files
+
+
+def rubbish_handle(nodes: Sequence[dict]) -> str:
+    """The account's Rubbish Bin root. Deleted files are recoverable from here
+    until the user empties it, which this tool never does."""
+    for node in nodes:
+        if node.get("t") == RUBBISH_TYPE:
+            return node["h"]
+    raise RuntimeError("no Rubbish Bin node in the account tree")
 
 
 def _post(url: str, data: bytes, timeout: int):
@@ -189,6 +215,30 @@ class MegaApi:
 
     def files(self) -> list[MegaFile]:
         return node_paths(self.fetch_nodes(), self.master_key)
+
+    def move_to_rubbish(self, handles: Sequence[str], rubbish: str, *,
+                        batch_size: int = 100) -> dict[str, int]:
+        """Move nodes into the Rubbish Bin. Returns each node's result code
+        (0 = moved). This is the only write this client can perform, and it
+        is reversible: the bin keeps everything until the user empties it.
+        """
+        if not rubbish:
+            raise ValueError("a Rubbish Bin handle is required")
+        results: dict[str, int] = {}
+        for start in range(0, len(handles), batch_size):
+            batch = list(handles[start:start + batch_size])
+            payload = [{"a": "m", "n": h, "t": rubbish} for h in batch]
+            url = (f"{self.endpoint}?id={random.randint(0, 10 ** 9)}"
+                   f"&sid={self.session_id}")
+            reply = self._post(url, json.dumps(payload).encode(),
+                               REQUEST_TIMEOUT_SECONDS)
+            if isinstance(reply, int):            # whole batch rejected
+                for h in batch:
+                    results[h] = reply
+                continue
+            for h, code in zip(batch, reply):
+                results[h] = code if isinstance(code, int) else 0
+        return results
 
 
 def session_from_rclone(remote: str, runner: Callable = subprocess.run,

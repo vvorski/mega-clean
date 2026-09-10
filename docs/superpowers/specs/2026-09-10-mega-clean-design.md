@@ -155,3 +155,12 @@ default.
 Python 3.11+, stdlib `sqlite3` and `argparse`. Third-party: `exifread`,
 `Pillow`, `pillow-heif`, `ImageHash`. External: `rclone` (required), MEGAcmd
 (optional).
+
+## Amendment — 2026-09-10, Rubbish Bin
+
+The "no deletion code" guarantee is narrowed to **no permanent deletion**. A
+`bin` command moves redundant copies to MEGA's Rubbish Bin by node handle,
+driven by a reviewed plan file, with two invariants checked at plan time and
+again at execution: no planned node is a keeper anywhere, and only
+byte-verified copies qualify by default. The tool cannot empty the bin or hard
+delete; the guard test now forbids the MEGA `d` command and `hard_delete`.

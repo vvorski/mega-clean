@@ -12,6 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from . import __version__
+from .bin import build_bin_plan, execute_bin_plan, read_bin_plan, write_bin_plan
 from .doctor import run_checks
 from .dupes import cluster_nodes, nodes_from_rows
 from .fingerprint import run_fingerprint
@@ -21,7 +22,7 @@ from .index import (
     set_parent, size_collision_ids, targets_for, upsert_node,
 )
 from .local import local_scope, scan_local
-from .megaapi import MegaApi, session_from_rclone
+from .megaapi import MegaApi, rubbish_handle, session_from_rclone
 from .planner import build_plan, read_plan, write_plan
 from .previews import fetch_previews, preview_targets
 from .remote import RcloneRemote, Remote, join_remote_path
@@ -135,6 +136,53 @@ def _cmd_fingerprint(args, conn, make_remote) -> int:
                                      targets, workers=args.workers)
     print(f"fingerprinted {ok}, failed {failed}")
     return 0 if failed == 0 else 1
+
+
+def _cmd_plan_bin(args, conn, make_remote) -> int:
+    """List the redundant copies that would go to the Rubbish Bin."""
+    nodes = nodes_from_rows(iter_nodes(conn, "remote"))
+    if not nodes:
+        print("nothing indexed — run scan-fingerprints first", file=sys.stderr)
+        return 1
+    clusters = cluster_nodes(nodes, phash_threshold=args.threshold,
+                             prefer=tuple(args.prefer))
+    entries = build_bin_plan(clusters, only_under=tuple(args.only_under),
+                             allow_unverified=args.allow_unverified)
+    write_bin_plan(entries, Path(args.out), remote=args.remote,
+                   only_under=tuple(args.only_under), prefer=tuple(args.prefer))
+    byte = sum(1 for e in entries if e.evidence == "byte")
+    print(f"{len(entries):,} files ({sum(e.size for e in entries) / 1e9:.2f} GB) "
+          f"would move to the Rubbish Bin; {byte:,} byte-verified, "
+          f"{len(entries) - byte:,} fingerprint-only")
+    print(f"plan written to {args.out} — review it, then: "
+          f"megaclean bin --plan {args.out} --dry-run")
+    return 0
+
+
+def _cmd_bin(args, conn, make_remote) -> int:
+    """Execute a reviewed bin plan. Reversible: nothing is permanently deleted."""
+    entries, header = read_bin_plan(Path(args.plan))
+    remote_name = args.remote or header.get("remote")
+    session_id, master_key = session_from_rclone(remote_name)
+    api = MegaApi(session_id, master_key)
+    if args.dry_run:
+        result = execute_bin_plan(api, entries, "dry-run", dry_run=True)
+        print(f"DRY RUN: {result.moved:,} files "
+              f"({sum(e.size for e in entries) / 1e9:.2f} GB) would move to "
+              f"the Rubbish Bin; nothing touched")
+        return 0
+    print("locating the Rubbish Bin ...")
+    rubbish = rubbish_handle(api.fetch_nodes())
+    if args.limit:
+        entries = entries[:args.limit]
+    print(f"moving {len(entries):,} files to the Rubbish Bin ...")
+    result = execute_bin_plan(api, entries, rubbish)
+    print(f"moved {result.moved:,}, failed {result.failed:,}")
+    for path, code in result.errors[:20]:
+        print(f"  {path}: MEGA error {code}", file=sys.stderr)
+    print("Files are in the Rubbish Bin and recoverable until you empty it. "
+          "Re-run scan-fingerprints to refresh the index.")
+    return 0 if result.failed == 0 else 1
 
 
 def _cmd_folders(args, conn, make_remote) -> int:
@@ -330,6 +378,28 @@ def build_parser() -> argparse.ArgumentParser:
                    help="also write gallery thumbnails to this directory, "
                         "reusing the bytes already fetched")
     p.set_defaults(func=_cmd_verify)
+
+    p = sub.add_parser("plan-bin",
+                       help="list redundant copies to move to the Rubbish Bin")
+    p.add_argument("--remote", default="mega")
+    p.add_argument("--out", default="bin-plan.json")
+    p.add_argument("--only-under", action="append", default=[],
+                   help="only bin copies under this path prefix; repeatable")
+    p.add_argument("--prefer", action="append", default=[],
+                   help="path prefix of a canonical folder; repeatable")
+    p.add_argument("--allow-unverified", action="store_true",
+                   help="include fingerprint-only matches (wrong ~1 in 80)")
+    p.add_argument("--threshold", type=int, default=6)
+    p.set_defaults(func=_cmd_plan_bin)
+
+    p = sub.add_parser("bin",
+                       help="move a reviewed plan's files to the Rubbish Bin")
+    p.add_argument("--plan", required=True)
+    p.add_argument("--remote", default=None)
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--limit", type=int, default=None,
+                   help="only the first N entries (for a trial batch)")
+    p.set_defaults(func=_cmd_bin)
 
     p = sub.add_parser("folders",
                        help="folder-level cleanup plan (collapse decisions)")
