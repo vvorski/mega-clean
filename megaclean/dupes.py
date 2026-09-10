@@ -20,6 +20,12 @@ class Node:
     height: int | None
     mtime: str
     crc: str | None = None
+    node_id: str = ""
+
+    @property
+    def key(self) -> str:
+        """Identity for clustering: two files can share a path in MEGA."""
+        return self.node_id or self.path
 
 
 @dataclass(frozen=True)
@@ -40,7 +46,7 @@ class Cluster:
         buckets: dict[str, list[Node]] = defaultdict(list)
         for member in self.members:
             buckets[member.sig].append(member)
-        groups = [tuple(sorted(g, key=lambda n: n.path))
+        groups = [tuple(sorted(g, key=lambda n: (n.path, n.key)))
                   for g in buckets.values() if len(g) > 1]
         groups.sort(key=lambda g: g[0].path)
         return tuple(groups)
@@ -108,7 +114,7 @@ def choose_keeper(nodes: Sequence[Node]) -> Node:
     """Deterministic: largest pixel area, then bytes, then oldest, then shallowest."""
     def rank(n: Node):
         area = (n.width or 0) * (n.height or 0)
-        return (-area, -n.size, n.mtime or "", n.path.count("/"), n.path)
+        return (-area, -n.size, n.mtime or "", n.path.count("/"), n.path, n.key)
     return min(nodes, key=rank)
 
 
@@ -133,20 +139,19 @@ def _kind_of(members: Sequence[Node]) -> str:
 
 def cluster_nodes(nodes: Sequence[Node], *,
                   phash_threshold: int = 6) -> list[Cluster]:
-    by_path = {n.path: n for n in nodes}
     uf = _UnionFind()
-    for path in by_path:
-        uf.find(path)
+    for n in nodes:
+        uf.find(n.key)
 
     for key in ("sig", "crc", "exif_key"):
         buckets: dict[str, list[str]] = defaultdict(list)
         for n in nodes:
             value = getattr(n, key)
             if value:
-                buckets[value].append(n.path)
-        for paths in buckets.values():
-            for other in paths[1:]:
-                uf.union(paths[0], other)
+                buckets[value].append(n.key)
+        for keys in buckets.values():
+            for other in keys[1:]:
+                uf.union(keys[0], other)
 
     # One tree per provenance class: thumbnail and full-image hashes describe
     # the same photo differently and must never be compared to each other.
@@ -157,21 +162,21 @@ def cluster_nodes(nodes: Sequence[Node], *,
         tree, owners = BKTree(), defaultdict(list)
         for n in members:
             tree.add(n.phash)
-            owners[n.phash].append(n.path)
+            owners[n.phash].append(n.key)
         for n in members:
             for neighbour in tree.query(n.phash, phash_threshold):
-                for path in owners[neighbour]:
-                    uf.union(n.path, path)
+                for key in owners[neighbour]:
+                    uf.union(n.key, key)
 
     groups: dict[str, list[Node]] = defaultdict(list)
     for n in nodes:
-        groups[uf.find(n.path)].append(n)
+        groups[uf.find(n.key)].append(n)
 
     clusters = []
     for members in groups.values():
         if len(members) < 2:
             continue
-        members.sort(key=lambda n: n.path)
+        members.sort(key=lambda n: (n.path, n.key))
         kind = _kind_of(members)
         clusters.append(Cluster(kind=kind, members=tuple(members),
                                 keeper=choose_keeper(members)))
@@ -192,5 +197,6 @@ def nodes_from_rows(rows: Iterable[Mapping]) -> list[Node]:
             phash_src=row["phash_src"], width=row["width"],
             height=row["height"], mtime=row["mtime"] or "",
             crc=row["crc"] if "crc" in row.keys() else None,
+            node_id=(row["node_id"] if "node_id" in row.keys() else "") or "",
         ))
     return nodes

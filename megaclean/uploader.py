@@ -49,7 +49,8 @@ def execute_plan(conn, remote: Remote, entries: Sequence[PlanEntry], *,
                     f"{source} is gone since the plan was made")
             if not dry_run:
                 remote.upload(str(source), entry.dest_path)
-                upsert_node(conn, scope, entry.dest_path, entry.size, "")
+                upsert_node(conn, scope, entry.dest_path, entry.size, "",
+                            node_id=entry.dest_path)
                 set_signature(conn, scope, entry.dest_path, sig=entry.sig,
                               exif_key=None, phash=None, phash_src=None,
                               width=None, height=None)

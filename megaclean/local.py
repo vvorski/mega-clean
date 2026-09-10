@@ -63,7 +63,7 @@ def scan_local(conn, root: Path, *, include_video: bool = False,
             mtime = _dt.datetime.fromtimestamp(
                 stat.st_mtime, _dt.timezone.utc
             ).isoformat(timespec="seconds")
-            upsert_node(conn, scope, rel, stat.st_size, mtime)
+            upsert_node(conn, scope, rel, stat.st_size, mtime, node_id=rel)
             size, head, tail = read_parts(path)
             fp = fingerprint_from_parts(size, head, tail)
             set_signature(conn, scope, rel, sig=fp.sig, exif_key=fp.exif_key,

@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import random
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
@@ -66,9 +66,9 @@ def _fetch_with_backoff(remote: Remote, path: str, size: int,
     raise last
 
 
-def run_fingerprint(conn, remote: Remote, scope: str, paths: list[str], *,
-                    workers: int = 8, sizes: dict[str, int],
-                    max_attempts: int = MAX_ATTEMPTS,
+def run_fingerprint(conn, remote: Remote, scope: str,
+                    targets: Sequence[tuple[str, str, int]], *,
+                    workers: int = 8, max_attempts: int = MAX_ATTEMPTS,
                     on_progress: Callable[[str, bool], None] | None = None
                     ) -> tuple[int, int]:
     """Fingerprint `paths`, writing each result as it lands.
@@ -77,25 +77,26 @@ def run_fingerprint(conn, remote: Remote, scope: str, paths: list[str], *,
     work in flight; the next run picks up whatever is still pending.
     """
     ok = failed = 0
-    if not paths:
+    if not targets:
         return (0, 0)
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
-            pool.submit(_fetch_with_backoff, remote, p, sizes[p], max_attempts): p
-            for p in paths
+            pool.submit(_fetch_with_backoff, remote, path, size,
+                        max_attempts): (node_id, path)
+            for node_id, path, size in targets
         }
         for future in as_completed(futures):
-            path = futures[future]
+            node_id, path = futures[future]
             try:
                 fp = future.result()
             except Exception as exc:
-                set_error(conn, scope, path, str(exc))
+                set_error(conn, scope, node_id, str(exc))
                 failed += 1
                 log.warning("fingerprint failed for %s: %s", path, exc)
                 if on_progress:
                     on_progress(path, False)
                 continue
-            set_signature(conn, scope, path, sig=fp.sig, exif_key=fp.exif_key,
+            set_signature(conn, scope, node_id, sig=fp.sig, exif_key=fp.exif_key,
                           phash=fp.phash, phash_src=fp.phash_src,
                           width=fp.width, height=fp.height)
             ok += 1

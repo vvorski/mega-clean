@@ -16,8 +16,8 @@ from .doctor import run_checks
 from .dupes import cluster_nodes, nodes_from_rows
 from .fingerprint import run_fingerprint
 from .index import (
-    clear_errors, crc_group_paths, iter_nodes, open_index, pending_paths,
-    set_crc, size_collision_paths, upsert_node,
+    clear_errors, crc_group_ids, iter_nodes, open_index, pending_ids, set_crc,
+    size_collision_ids, targets_for, upsert_node,
 )
 from .local import local_scope, scan_local
 from .megaapi import MegaApi, session_from_rclone
@@ -57,9 +57,11 @@ def _cmd_scan_fingerprints(args, conn, make_remote) -> int:
     for f in files:
         if roots and not f.path.startswith(roots):
             continue
-        upsert_node(conn, "remote", f.path, f.size, "")
+        # Keyed on the MEGA handle: same-named siblings in one folder are
+        # legal, common, and exactly the duplicates we are hunting.
+        upsert_node(conn, "remote", f.path, f.size, "", node_id=f.handle)
         if f.crc:
-            set_crc(conn, "remote", f.path, f.crc.hex())
+            set_crc(conn, "remote", f.handle, f.crc.hex())
             with_crc += 1
         kept += 1
     conn.commit()
@@ -76,17 +78,17 @@ def _cmd_verify(args, conn, make_remote) -> int:
     account, so anything you intend to act on should be checked against the
     files themselves.
     """
-    sizes = {r["path"]: r["size"] for r in iter_nodes(conn, "remote")}
-    candidates = crc_group_paths(conn, "remote")
-    paths = pending_paths(conn, "remote", candidates)
-    if not paths:
+    candidates = crc_group_ids(conn, "remote")
+    node_ids = pending_ids(conn, "remote", candidates)
+    if not node_ids:
         print("nothing left to verify")
         return 0
-    print(f"verifying {len(paths):,} files in fingerprint groups "
+    targets = targets_for(conn, "remote", node_ids)
+    print(f"verifying {len(targets):,} files in fingerprint groups "
           f"(workers={args.workers})")
     with args.served_factory(args.remote) as remote:
-        ok, failed = run_fingerprint(conn, remote, "remote", paths,
-                                     workers=args.workers, sizes=sizes)
+        ok, failed = run_fingerprint(conn, remote, "remote", targets,
+                                     workers=args.workers)
     print(f"verified {ok:,}, failed {failed:,}")
     return 0 if failed == 0 else 1
 
@@ -94,19 +96,18 @@ def _cmd_verify(args, conn, make_remote) -> int:
 def _cmd_fingerprint(args, conn, make_remote) -> int:
     if args.retry:
         print(f"cleared {clear_errors(conn, 'remote')} previous errors")
-    sizes = {r["path"]: r["size"] for r in iter_nodes(conn, "remote")}
-    if not sizes:
+    all_ids = [r["node_id"] for r in iter_nodes(conn, "remote")]
+    if not all_ids:
         print("nothing indexed yet — run scan-remote first", file=sys.stderr)
         return 1
-    if args.scope == "collisions":
-        candidates = size_collision_paths(conn, "remote")
-    else:
-        candidates = list(sizes)
-    paths = pending_paths(conn, "remote", candidates)
-    if not paths:
+    candidates = (size_collision_ids(conn, "remote")
+                  if args.scope == "collisions" else all_ids)
+    node_ids = pending_ids(conn, "remote", candidates)
+    if not node_ids:
         print("nothing pending")
         return 0
-    print(f"fingerprinting {len(paths)} files (scope={args.scope}, "
+    targets = targets_for(conn, "remote", node_ids)
+    print(f"fingerprinting {len(targets)} files (scope={args.scope}, "
           f"workers={args.workers}, transport={args.transport})")
     if args.transport == "serve":
         # One `rclone serve http` process instead of one `rclone cat` per file:
@@ -114,11 +115,11 @@ def _cmd_fingerprint(args, conn, make_remote) -> int:
         # dominates everything else at this scale.
         print("starting rclone serve http (loads the account tree once) ...")
         with args.served_factory(args.remote) as remote:
-            ok, failed = run_fingerprint(conn, remote, "remote", paths,
-                                         workers=args.workers, sizes=sizes)
+            ok, failed = run_fingerprint(conn, remote, "remote", targets,
+                                         workers=args.workers)
     else:
         ok, failed = run_fingerprint(conn, make_remote(args.remote), "remote",
-                                     paths, workers=args.workers, sizes=sizes)
+                                     targets, workers=args.workers)
     print(f"fingerprinted {ok}, failed {failed}")
     return 0 if failed == 0 else 1
 

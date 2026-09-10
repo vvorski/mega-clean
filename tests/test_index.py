@@ -1,7 +1,7 @@
 import pytest
 from megaclean.index import (
     open_index, upsert_node, set_signature, set_error,
-    iter_nodes, size_collision_paths, pending_paths,
+    iter_nodes, size_collision_ids, pending_ids, targets_for,
 )
 
 
@@ -30,7 +30,7 @@ def test_size_collision_paths_ignores_unique_sizes(conn):
     upsert_node(conn, "remote", "/a.jpg", 100, "t")
     upsert_node(conn, "remote", "/b.jpg", 100, "t")
     upsert_node(conn, "remote", "/c.jpg", 999, "t")
-    assert sorted(size_collision_paths(conn, "remote")) == ["/a.jpg", "/b.jpg"]
+    assert sorted(size_collision_ids(conn, "remote")) == ["/a.jpg", "/b.jpg"]
 
 
 def test_pending_excludes_signed_and_errored(conn):
@@ -39,7 +39,7 @@ def test_pending_excludes_signed_and_errored(conn):
     set_signature(conn, "remote", "/a.jpg", sig="deadbeef", exif_key=None,
                   phash=None, phash_src=None, width=None, height=None)
     set_error(conn, "remote", "/b.jpg", "timeout")
-    assert pending_paths(conn, "remote") == ["/c.jpg"]
+    assert pending_ids(conn, "remote") == ["/c.jpg"]
 
 
 def test_set_signature_clears_previous_error(conn):
@@ -68,3 +68,29 @@ def test_upsert_invalidates_signature_when_size_changes(conn):
     row = next(iter_nodes(conn, "remote"))
     assert row["sig"] is None
     assert row["exif_key"] is None
+
+
+def test_same_path_different_node_are_both_kept(conn):
+    """MEGA allows two files with the same name in one folder, and those pairs
+    are usually the duplicates worth finding."""
+    upsert_node(conn, "remote", "Photos/a.jpg", 100, "t", node_id="handleA")
+    upsert_node(conn, "remote", "Photos/a.jpg", 100, "t", node_id="handleB")
+    rows = list(iter_nodes(conn, "remote"))
+    assert len(rows) == 2
+    assert {r["node_id"] for r in rows} == {"handleA", "handleB"}
+    assert {r["path"] for r in rows} == {"Photos/a.jpg"}
+
+
+def test_signature_addresses_one_node_not_a_path(conn):
+    upsert_node(conn, "remote", "Photos/a.jpg", 100, "t", node_id="handleA")
+    upsert_node(conn, "remote", "Photos/a.jpg", 100, "t", node_id="handleB")
+    set_signature(conn, "remote", "handleA", sig="sigA", exif_key=None,
+                  phash=None, phash_src=None, width=None, height=None)
+    rows = {r["node_id"]: r for r in iter_nodes(conn, "remote")}
+    assert rows["handleA"]["sig"] == "sigA"
+    assert rows["handleB"]["sig"] is None
+
+
+def test_targets_for_returns_id_path_size(conn):
+    upsert_node(conn, "remote", "Photos/a.jpg", 100, "t", node_id="h1")
+    assert targets_for(conn, "remote", ["h1"]) == [("h1", "Photos/a.jpg", 100)]

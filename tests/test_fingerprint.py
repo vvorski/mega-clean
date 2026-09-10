@@ -1,7 +1,9 @@
 from megaclean.fingerprint import (
     fetch_fingerprint, fingerprint_from_parts, run_fingerprint,
 )
-from megaclean.index import iter_nodes, open_index, pending_paths, upsert_node
+from megaclean.index import (
+    iter_nodes, open_index, pending_ids, targets_for, upsert_node,
+)
 from megaclean.remote import FakeRemote
 from megaclean.signature import signature_of_bytes
 
@@ -48,8 +50,9 @@ def test_run_fingerprint_persists_results(make_jpeg, tmp_path):
     conn = open_index(tmp_path / "i.db")
     upsert_node(conn, "remote", "a.jpg", len(a), "t")
     upsert_node(conn, "remote", "b.jpg", len(b), "t")
-    ok, failed = run_fingerprint(conn, remote, "remote", ["a.jpg", "b.jpg"],
-                                 workers=2, sizes={"a.jpg": len(a), "b.jpg": len(b)})
+    ok, failed = run_fingerprint(
+        conn, remote, "remote",
+        [("a.jpg", "a.jpg", len(a)), ("b.jpg", "b.jpg", len(b))], workers=2)
     assert (ok, failed) == (2, 0)
     rows = {r["path"]: r for r in iter_nodes(conn, "remote")}
     assert rows["a.jpg"]["sig"] == signature_of_bytes(a)
@@ -60,9 +63,9 @@ def test_failures_are_recorded_not_raised(tmp_path):
     remote = FakeRemote({})
     conn = open_index(tmp_path / "i.db")
     upsert_node(conn, "remote", "gone.jpg", 10, "t")
-    ok, failed = run_fingerprint(conn, remote, "remote", ["gone.jpg"],
-                                 workers=1, sizes={"gone.jpg": 10},
-                                 max_attempts=1)
+    ok, failed = run_fingerprint(conn, remote, "remote",
+                                 [("gone.jpg", "gone.jpg", 10)],
+                                 workers=1, max_attempts=1)
     assert (ok, failed) == (0, 1)
     row = next(iter_nodes(conn, "remote"))
     assert row["sig"] is None
@@ -74,10 +77,11 @@ def test_rerun_skips_already_fingerprinted(make_jpeg, tmp_path):
     remote = CountingRemote({"a.jpg": data})
     conn = open_index(tmp_path / "i.db")
     upsert_node(conn, "remote", "a.jpg", len(data), "t")
-    sizes = {"a.jpg": len(data)}
-    run_fingerprint(conn, remote, "remote", pending_paths(conn, "remote"),
-                    workers=1, sizes=sizes)
+    run_fingerprint(conn, remote, "remote",
+                    targets_for(conn, "remote", pending_ids(conn, "remote")),
+                    workers=1)
     before = len(remote.reads)
-    run_fingerprint(conn, remote, "remote", pending_paths(conn, "remote"),
-                    workers=1, sizes=sizes)
+    run_fingerprint(conn, remote, "remote",
+                    targets_for(conn, "remote", pending_ids(conn, "remote")),
+                    workers=1)
     assert len(remote.reads) == before
