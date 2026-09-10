@@ -18,3 +18,12 @@ venv/
 # Generated reports contain real file paths and photo thumbnails
 report/
 *.megaclean/
+
+# Generated plans and manifests embed real account paths
+folder-plan.md
+bin-plan.json
+ops.md
+ops.csv
+ops.json
+*-plan.md
+*-plan.json
