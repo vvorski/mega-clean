@@ -52,7 +52,7 @@ def build_bin_plan(clusters: Sequence[Cluster], *,
         for group in cluster.content_groups:
             if len(group) < 2:
                 continue
-            keeper = choose_keeper(list(group), cluster.prefer)
+            keeper = choose_keeper(list(group), cluster.prefer, cluster.avoid)
             for member in group:
                 if member.key == keeper.key:
                     continue

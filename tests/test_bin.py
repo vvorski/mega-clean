@@ -105,3 +105,15 @@ def test_plan_round_trips(tmp_path):
     assert loaded == entries
     assert header["only_under"] == ["Inbox"]
     assert json.loads(out.read_text())["entries"][0]["evidence"] == "byte"
+
+
+def test_bin_plan_honours_the_clusters_avoid_constraint():
+    """The executable path must pick the same survivor as the manifest; a
+    keeper in a folder the folder plan removes would be binned by one and
+    kept by the other."""
+    a = n("Old/a.jpg", node_id="old")
+    b = n("New/deep/deeper/a.jpg", node_id="new")
+    clusters = cluster_nodes([a, b], avoid=("Old",))
+    plan = build_bin_plan(clusters)
+    assert [e.handle for e in plan] == ["old"]
+    assert plan[0].kept_handle == "new"

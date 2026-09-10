@@ -94,3 +94,14 @@ def test_signature_addresses_one_node_not_a_path(conn):
 def test_targets_for_returns_id_path_size(conn):
     upsert_node(conn, "remote", "Photos/a.jpg", 100, "t", node_id="h1")
     assert targets_for(conn, "remote", ["h1"]) == [("h1", "Photos/a.jpg", 100)]
+
+
+def test_prune_missing_drops_rows_for_nodes_a_rescan_no_longer_sees(conn):
+    """A file moved to the bin must stop counting as a live copy."""
+    from megaclean.index import prune_missing
+    upsert_node(conn, "remote", "Photos/a.jpg", 1, "t", node_id="h1")
+    upsert_node(conn, "remote", "Photos/b.jpg", 1, "t", node_id="h2")
+    upsert_node(conn, "remote", "Other/c.jpg", 1, "t", node_id="h3")
+    removed = prune_missing(conn, "remote", seen_ids={"h1"}, roots=("Photos",))
+    assert removed == 1
+    assert {r["node_id"] for r in iter_nodes(conn, "remote")} == {"h1", "h3"}

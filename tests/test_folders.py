@@ -297,3 +297,17 @@ def test_plan_states_how_much_of_each_decision_is_byte_verified(tmp_path):
     text = out.read_text()
     assert "2 of 3" in text or "67%" in text
     assert "fingerprint" in text.lower()
+
+
+def test_an_inbox_is_never_chosen_as_the_destination():
+    """Even with no --prefer and a lexicographic tie, the library must not be
+    collapsed INTO the phone's auto-sync folder."""
+    from megaclean.folders import merge_decisions
+    lib = [n(f"Photos/2019/{i}.jpg") for i in range(2)]
+    inb = [n(f"Camera Uploads/{i}.jpg") for i in range(2)]
+    overlaps = analyse_folders([cluster(a, b) for a, b in zip(lib, inb)],
+                               lib + inb, min_files=1)
+    d = merge_decisions(overlaps, inbox=("Camera Uploads",))[0]
+    assert d.source == "Camera Uploads"
+    assert d.destination == "Photos/2019"
+    assert d.source_is_inbox

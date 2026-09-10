@@ -7,7 +7,7 @@ where it stopped.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 SCHEMA_VERSION = 4
@@ -194,6 +194,25 @@ def targets_for(conn: sqlite3.Connection, scope: str,
     wanted = set(node_ids)
     return [(r["node_id"], r["path"], r["size"])
             for r in iter_nodes(conn, scope) if r["node_id"] in wanted]
+
+
+def prune_missing(conn: sqlite3.Connection, scope: str, *,
+                  seen_ids: set[str], roots: Sequence[str]) -> int:
+    """Drop index rows under `roots` whose node a fresh scan did not return.
+
+    Nodes moved to the Rubbish Bin (or deleted elsewhere) would otherwise keep
+    counting as live copies. This edits only our own index.
+    """
+    rows = conn.execute("SELECT node_id, path FROM nodes WHERE scope = ?",
+                        (scope,)).fetchall()
+    prefixes = tuple(r.strip("/") + "/" for r in roots) if roots else ()
+    stale = [r["node_id"] for r in rows
+             if r["node_id"] not in seen_ids
+             and (not prefixes or r["path"].startswith(prefixes))]
+    conn.executemany("DELETE FROM nodes WHERE scope = ? AND node_id = ?",
+                     [(scope, n) for n in stale])
+    conn.commit()
+    return len(stale)
 
 
 def clear_errors(conn: sqlite3.Connection, scope: str) -> int:

@@ -165,9 +165,13 @@ def merge_decisions(overlaps: Sequence[FolderOverlap],
         seen.add(pair)
         other = index.get(other_name)
 
-        mine = (_preference(overlap.folder, prefer),
+        # An inbox can never be the survivor: it is machine-managed and
+        # refills itself. That outranks preference, uniqueness and size.
+        def is_inbox(folder: str) -> int:
+            return 1 if _preference(folder, inbox) < len(inbox) else 0
+        mine = (is_inbox(overlap.folder), _preference(overlap.folder, prefer),
                 -overlap.unique_files, -overlap.total_bytes, overlap.folder)
-        theirs = (_preference(other_name, prefer),
+        theirs = (is_inbox(other_name), _preference(other_name, prefer),
                   -(other.unique_files if other else 0),
                   -(other.total_bytes if other else 0), other_name)
         # Lower sorts first and survives.

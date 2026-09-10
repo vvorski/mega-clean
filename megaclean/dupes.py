@@ -145,9 +145,10 @@ def choose_keeper(nodes: Sequence[Node], prefer: Sequence[str] = (),
     copy wherever it happens to sit -- but above path depth, so a curated
     library beats a shallower auto-sync inbox.
 
-    `avoid` lists folders a folder-level plan is removing. A copy inside one
-    of those must not be the survivor, or the file plan and the folder plan
-    would contradict each other. It ranks above `prefer`, below quality.
+    `avoid` lists exact folders (not prefixes) a folder-level plan is removing,
+    plus auto-sync inboxes. A copy directly inside one must not be the
+    survivor, or the file plan and the folder plan would contradict each
+    other. It ranks above `prefer`, below quality.
     """
     def preference(n: Node) -> int:
         for i, prefix in enumerate(prefer):
@@ -156,7 +157,9 @@ def choose_keeper(nodes: Sequence[Node], prefer: Sequence[str] = (),
         return len(prefer)
 
     def doomed(n: Node) -> int:
-        return 1 if any(n.path.startswith(a) for a in avoid) else 0
+        # Exact directory, not a prefix: removing Old must not demote Old/sub.
+        folder = n.path.rsplit("/", 1)[0] if "/" in n.path else "/"
+        return 1 if folder in avoid else 0
 
     def rank(n: Node):
         area = (n.width or 0) * (n.height or 0)

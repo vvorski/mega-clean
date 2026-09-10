@@ -18,8 +18,9 @@ from .dupes import cluster_nodes, nodes_from_rows
 from .fingerprint import run_fingerprint
 from .folders import analyse_folders, write_folder_plan
 from .index import (
-    clear_errors, crc_group_ids, iter_nodes, open_index, pending_ids, set_crc,
-    set_parent, size_collision_ids, targets_for, upsert_node,
+    clear_errors, crc_group_ids, iter_nodes, open_index, pending_ids,
+    prune_missing, set_crc, set_parent, size_collision_ids, targets_for,
+    upsert_node,
 )
 from .local import local_scope, scan_local
 from .megaapi import MegaApi, rubbish_handle, session_from_rclone
@@ -60,9 +61,11 @@ def _cmd_scan_fingerprints(args, conn, make_remote) -> int:
     files = MegaApi(session_id, master_key).files()
     roots = tuple(r.strip("/") for r in args.root) if args.root else ()
     kept = with_crc = 0
+    seen: set[str] = set()
     for f in files:
         if roots and not f.path.startswith(roots):
             continue
+        seen.add(f.handle)
         # Keyed on the MEGA handle: same-named siblings in one folder are
         # legal, common, and exactly the duplicates we are hunting.
         upsert_node(conn, "remote", f.path, f.size, "", node_id=f.handle)
@@ -72,6 +75,10 @@ def _cmd_scan_fingerprints(args, conn, make_remote) -> int:
             with_crc += 1
         kept += 1
     conn.commit()
+    stale = prune_missing(conn, "remote", seen_ids=seen, roots=roots)
+    if stale:
+        print(f"dropped {stale:,} index rows for files no longer present "
+              f"(binned or deleted)")
     print(f"decoded {len(files):,} files; indexed {kept:,}"
           f"{' under ' + ', '.join(roots) if roots else ''}, "
           f"{with_crc:,} with a content fingerprint")
@@ -200,12 +207,17 @@ def _cmd_plan_ops(args, conn, make_remote) -> int:
                            phash_threshold=args.threshold)
     write_operations(ops, Path(args.out))
     from collections import Counter
+    from .ops import missing_handles
     c = Counter(o.kind for o in ops)
     b = Counter()
     for o in ops:
         b[o.kind] += o.size
-    for kind in ("MOVE", "BIN", "REMOVE_FOLDER", "CONFLICT"):
+    for kind in ("MOVE", "BIN", "REMOVE_FOLDER", "CONFLICT", "UNVERIFIED"):
         print(f"  {kind:14s} {c[kind]:>6,}   {b[kind] / 1e9:6.2f} GB")
+    unknown = missing_handles(ops)
+    if unknown:
+        print(f"  ⚠️ {unknown:,} operations lack a folder handle — re-run "
+              f"scan-fingerprints before executing", file=sys.stderr)
     print(f"written: {args.out}.md (review), {args.out}.csv, {args.out}.json")
     return 0
 
