@@ -53,6 +53,16 @@ megaclean dupes --out report.html
 Both are resumable: interrupt them and re-run, and they pick up what is still
 pending. `--retry` re-attempts files that errored.
 
+### Why fingerprinting runs a server
+
+rclone's mega backend reloads the account's entire node tree every time the
+process starts — about 16 seconds on an 80k-file account — so one `rclone cat`
+per file spends all its time re-reading the tree. `fingerprint` therefore starts
+a single `rclone serve http` process and issues HTTP range requests against it,
+which turns a ~17s per-file cost into well under a second. Pass
+`--transport cat` to fall back to one process per file if the server will not
+start; expect it to be roughly 25× slower.
+
 **Variant detection is a heuristic.** EXIF matching is the strong signal.
 Perceptual hashing depends on the camera's embedded thumbnail surviving the
 edit, and some tools strip it; it is also unreliable on near-uniform images

@@ -23,6 +23,7 @@ from .local import local_scope, scan_local
 from .planner import build_plan, read_plan, write_plan
 from .remote import RcloneRemote, Remote, join_remote_path
 from .report import summarize, write_csv, write_html
+from .served import ServedRemote
 from .uploader import execute_plan
 
 DEFAULT_DB = ".megaclean/index.db"
@@ -57,9 +58,18 @@ def _cmd_fingerprint(args, conn, make_remote) -> int:
         print("nothing pending")
         return 0
     print(f"fingerprinting {len(paths)} files (scope={args.scope}, "
-          f"workers={args.workers})")
-    ok, failed = run_fingerprint(conn, make_remote(args.remote), "remote",
-                                 paths, workers=args.workers, sizes=sizes)
+          f"workers={args.workers}, transport={args.transport})")
+    if args.transport == "serve":
+        # One `rclone serve http` process instead of one `rclone cat` per file:
+        # the mega backend reloads the whole account tree on every start, which
+        # dominates everything else at this scale.
+        print("starting rclone serve http (loads the account tree once) ...")
+        with args.served_factory(args.remote) as remote:
+            ok, failed = run_fingerprint(conn, remote, "remote", paths,
+                                         workers=args.workers, sizes=sizes)
+    else:
+        ok, failed = run_fingerprint(conn, make_remote(args.remote), "remote",
+                                     paths, workers=args.workers, sizes=sizes)
     print(f"fingerprinted {ok}, failed {failed}")
     return 0 if failed == 0 else 1
 
@@ -162,6 +172,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "duplicates). all: every file (enables variant "
                         "detection)")
     p.add_argument("--workers", type=int, default=8)
+    p.add_argument("--transport", choices=("serve", "cat"), default="serve",
+                   help="serve: one long-lived rclone server (fast). "
+                        "cat: one rclone process per file (slow; a fallback "
+                        "if the server cannot start)")
     p.add_argument("--retry", action="store_true",
                    help="retry files that previously errored")
     p.set_defaults(func=_cmd_fingerprint)
@@ -201,8 +215,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None, *,
-         remote_factory: Callable[[str], Remote] = RcloneRemote) -> int:
+         remote_factory: Callable[[str], Remote] = RcloneRemote,
+         served_factory: Callable[[str], Remote] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    # Resolved at call time, not import time, so tests can patch the name.
+    args.served_factory = served_factory or ServedRemote
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(levelname)s %(message)s",

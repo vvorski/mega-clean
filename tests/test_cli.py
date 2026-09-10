@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+import megaclean.cli as cli
 from megaclean.cli import main
 from megaclean.index import iter_nodes, open_index
 from megaclean.remote import FakeRemote
@@ -27,6 +28,16 @@ def account(make_jpeg, tmp_path):
 @pytest.fixture
 def factory(account):
     return lambda name: account
+
+
+@pytest.fixture(autouse=True)
+def no_real_server(monkeypatch, account):
+    """The served transport must never launch a real rclone in tests."""
+    import contextlib
+
+    import megaclean.cli as cli
+    monkeypatch.setattr(cli, "ServedRemote",
+                        lambda name: contextlib.nullcontext(account))
 
 
 def test_scan_remote_populates_the_index(tmp_path, factory):
@@ -133,3 +144,15 @@ def test_unknown_command_exits_nonzero(tmp_path):
     with pytest.raises(SystemExit) as exc:
         main(["--db", str(tmp_path / "i.db"), "nonsense"])
     assert exc.value.code != 0
+
+
+def test_fingerprint_cat_transport_still_works(tmp_path, factory):
+    """The per-process transport remains available as a fallback."""
+    db = tmp_path / "i.db"
+    main(["--db", str(db), "scan-remote", "--remote", "mega", "--root",
+          "Photos"], remote_factory=factory)
+    assert main(["--db", str(db), "fingerprint", "--remote", "mega", "--root",
+                 "Photos", "--scope", "all", "--transport", "cat"],
+                remote_factory=factory) == 0
+    rows = {r["path"]: r for r in iter_nodes(open_index(db), "remote")}
+    assert all(r["sig"] for r in rows.values())
