@@ -130,3 +130,13 @@ def test_fetch_nodes_raises_on_a_numeric_error():
     api = MegaApi("SESSION", MASTER, poster=lambda *a, **k: -9)
     with pytest.raises(RuntimeError, match="-9"):
         api.fetch_nodes()
+
+
+def test_node_paths_records_the_parent_handle():
+    nodes = [
+        {"h": "root", "p": None, "t": 2},
+        _make_folder_node("f1", "root", "Photos"),
+        _make_file_node("n1", "f1", "a.jpg", fingerprint=b64encode(bytes(19))),
+    ]
+    f = node_paths(nodes, MASTER)[0]
+    assert f.parent == "f1"      # lets the report link to the containing folder

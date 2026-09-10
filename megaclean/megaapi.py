@@ -33,6 +33,7 @@ REQUEST_TIMEOUT_SECONDS = 300
 @dataclass(frozen=True)
 class MegaFile:
     handle: str
+    parent: str | None
     path: str
     size: int
     crc: bytes | None
@@ -144,7 +145,8 @@ def node_paths(nodes: Sequence[dict], master_key: bytes) -> list[MegaFile]:
         key_blob = _node_key(node, master)
         fingerprint = decoded.get("c")
         files.append(MegaFile(
-            handle=node["h"], path=path, size=int(node.get("s", 0)),
+            handle=node["h"], parent=node.get("p"), path=path,
+            size=int(node.get("s", 0)),
             crc=fingerprint_crc(fingerprint), fingerprint=fingerprint,
             file_attr=node.get("fa"),
             key=key_blob if key_blob and len(key_blob) >= 32 else None,

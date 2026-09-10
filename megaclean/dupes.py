@@ -21,6 +21,7 @@ class Node:
     mtime: str
     crc: str | None = None
     node_id: str = ""
+    parent_id: str | None = None
 
     @property
     def key(self) -> str:
@@ -219,5 +220,6 @@ def nodes_from_rows(rows: Iterable[Mapping]) -> list[Node]:
             height=row["height"], mtime=row["mtime"] or "",
             crc=row["crc"] if "crc" in row.keys() else None,
             node_id=(row["node_id"] if "node_id" in row.keys() else "") or "",
+            parent_id=(row["parent_id"] if "parent_id" in row.keys() else None),
         ))
     return nodes

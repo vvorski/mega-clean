@@ -10,7 +10,7 @@ import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS nodes (
@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     width      INTEGER,
     height     INTEGER,
     crc        TEXT,
+    parent_id  TEXT,
     error      TEXT,
     -- Keyed on node_id, never on path: MEGA permits two files with the same
     -- name in the same folder, and those pairs are usually the duplicates we
@@ -60,7 +61,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     have = {r["name"] for r in conn.execute("PRAGMA table_info(nodes)")}
     if not have:
         return
-    for column in ("crc",):
+    for column in ("crc", "parent_id"):
         if column not in have:
             conn.execute(f"ALTER TABLE nodes ADD COLUMN {column} TEXT")
     if "node_id" not in have:
@@ -68,6 +69,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE nodes ADD COLUMN node_id TEXT")
         conn.execute("UPDATE nodes SET node_id = path WHERE node_id IS NULL")
     conn.commit()
+
+
+def set_parent(conn: sqlite3.Connection, scope: str, node_id: str,
+               parent_id: str | None) -> None:
+    conn.execute("UPDATE nodes SET parent_id = ? WHERE scope = ? AND node_id = ?",
+                 (parent_id, scope, node_id))
 
 
 def set_crc(conn: sqlite3.Connection, scope: str, node_id: str,

@@ -17,7 +17,7 @@ from .dupes import cluster_nodes, nodes_from_rows
 from .fingerprint import run_fingerprint
 from .index import (
     clear_errors, crc_group_ids, iter_nodes, open_index, pending_ids, set_crc,
-    size_collision_ids, targets_for, upsert_node,
+    set_parent, size_collision_ids, targets_for, upsert_node,
 )
 from .local import local_scope, scan_local
 from .megaapi import MegaApi, session_from_rclone
@@ -63,6 +63,7 @@ def _cmd_scan_fingerprints(args, conn, make_remote) -> int:
         # Keyed on the MEGA handle: same-named siblings in one folder are
         # legal, common, and exactly the duplicates we are hunting.
         upsert_node(conn, "remote", f.path, f.size, "", node_id=f.handle)
+        set_parent(conn, "remote", f.handle, f.parent)
         if f.crc:
             set_crc(conn, "remote", f.handle, f.crc.hex())
             with_crc += 1
