@@ -12,6 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from . import __version__
+from .apply import apply_operations
 from .bin import build_bin_plan, execute_bin_plan, read_bin_plan, write_bin_plan
 from .doctor import run_checks
 from .dupes import cluster_nodes, nodes_from_rows
@@ -220,6 +221,34 @@ def _cmd_plan_ops(args, conn, make_remote) -> int:
               f"scan-fingerprints before executing", file=sys.stderr)
     print(f"written: {args.out}.md (review), {args.out}.csv, {args.out}.json")
     return 0
+
+
+def _cmd_apply(args, conn, make_remote) -> int:
+    """Execute a reviewed operations manifest, checking everything live."""
+    import json
+    from .ops import Operation
+    payload = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+    ops = [Operation(**o) for o in payload["operations"]]
+    if args.only_under:
+        ops = [o for o in ops if o.path.startswith(tuple(args.only_under))]
+    session_id, master_key = session_from_rclone(args.remote)
+    api = MegaApi(session_id, master_key)
+    rubbish = "dry-run" if args.dry_run else rubbish_handle(api.fetch_nodes())
+    phases = tuple(args.phase) if args.phase else ("MOVE", "BIN", "REMOVE_FOLDER")
+    print(f"{'DRY RUN: ' if args.dry_run else ''}applying phases {', '.join(phases)}"
+          f"{f' (limit {args.limit})' if args.limit else ''} ...")
+    r = apply_operations(api, ops, rubbish=rubbish, dry_run=args.dry_run,
+                         phases=phases, limit=args.limit)
+    print(f"moved {r.moved:,}  binned {r.binned:,}  folders removed {r.removed:,}  "
+          f"skipped/failed {r.failed:,}")
+    for path, why in r.errors[:25]:
+        print(f"  {path[-70:]}: {why}", file=sys.stderr)
+    if len(r.errors) > 25:
+        print(f"  ... {len(r.errors) - 25} more", file=sys.stderr)
+    if not args.dry_run:
+        print("All changes are moves; binned items stay recoverable until you "
+              "empty the Rubbish Bin. Re-run scan-fingerprints to refresh.")
+    return 0 if r.failed == 0 else 1
 
 
 def _cmd_folders(args, conn, make_remote) -> int:
@@ -450,6 +479,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--min-coverage", type=float, default=0.5)
     p.add_argument("--threshold", type=int, default=6)
     p.set_defaults(func=_cmd_plan_ops)
+
+    p = sub.add_parser("apply",
+                       help="execute a reviewed operations manifest")
+    p.add_argument("--manifest", default="ops.json")
+    p.add_argument("--remote", default="mega")
+    p.add_argument("--phase", action="append", default=[],
+                   choices=("MOVE", "BIN", "REMOVE_FOLDER"),
+                   help="run only these phases; repeatable")
+    p.add_argument("--only-under", action="append", default=[],
+                   help="only operations whose path starts with this prefix")
+    p.add_argument("--limit", type=int, default=None,
+                   help="execute at most N operations (trial batch)")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=_cmd_apply)
 
     p = sub.add_parser("folders",
                        help="folder-level cleanup plan (collapse decisions)")

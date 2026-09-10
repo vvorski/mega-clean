@@ -159,6 +159,22 @@ copies qualify unless you pass `--allow-unverified`. Then the habit that makes
 the residual risk irrelevant: **leave the Rubbish Bin alone for a month**
 before emptying it.
 
+## Executing the full manifest
+
+```bash
+megaclean plan-ops --prefer "Library" --inbox "Camera uploads"   # ops.md/.csv/.json
+megaclean apply --manifest ops.json --dry-run
+megaclean apply --manifest ops.json --phase MOVE --limit 10       # trial
+megaclean apply --manifest ops.json                               # MOVE, BIN, REMOVE_FOLDER
+```
+
+`apply` trusts nothing in the manifest. Every node is located in a freshly
+fetched tree; a MOVE is skipped if the file is not where the manifest said, if
+the destination is not a live folder, or if a same-named file now exists there;
+a BIN is skipped if its survivor is no longer live; a folder is removed only if
+the live tree shows it completely empty. CONFLICT and UNVERIFIED entries are
+never executed. All writes are moves.
+
 ## Tests
 
 ```bash

@@ -182,6 +182,17 @@ def rubbish_handle(nodes: Sequence[dict]) -> str:
     raise RuntimeError("no Rubbish Bin node in the account tree")
 
 
+def node_names(nodes: Sequence[dict], master_key: bytes) -> dict[str, str]:
+    """Decrypted name for every node we hold a key for (files and folders)."""
+    master = AES.new(master_key, AES.MODE_ECB)
+    names: dict[str, str] = {}
+    for node in nodes:
+        attrs = decrypt_attributes(node, master)
+        if attrs and attrs.get("n"):
+            names[node["h"]] = attrs["n"]
+    return names
+
+
 def _post(url: str, data: bytes, timeout: int):
     request = urllib.request.Request(
         url, data=data, headers={"Content-Type": "application/json"})
@@ -216,18 +227,27 @@ class MegaApi:
     def files(self) -> list[MegaFile]:
         return node_paths(self.fetch_nodes(), self.master_key)
 
+    def node_names(self, nodes: Sequence[dict]) -> dict[str, str]:
+        return node_names(nodes, self.master_key)
+
     def move_to_rubbish(self, handles: Sequence[str], rubbish: str, *,
                         batch_size: int = 100) -> dict[str, int]:
-        """Move nodes into the Rubbish Bin. Returns each node's result code
-        (0 = moved). This is the only write this client can perform, and it
-        is reversible: the bin keeps everything until the user empties it.
-        """
+        """Move nodes into the Rubbish Bin (reversible until the user empties
+        it). Returns each node's result code (0 = moved)."""
         if not rubbish:
             raise ValueError("a Rubbish Bin handle is required")
+        return self.move_nodes(handles, rubbish, batch_size=batch_size)
+
+    def move_nodes(self, handles: Sequence[str], target: str, *,
+                   batch_size: int = 100) -> dict[str, int]:
+        """Move nodes under another folder. Moves are the only writes this
+        client performs; nothing here can permanently delete."""
+        if not target:
+            raise ValueError("a target folder handle is required")
         results: dict[str, int] = {}
         for start in range(0, len(handles), batch_size):
             batch = list(handles[start:start + batch_size])
-            payload = [{"a": "m", "n": h, "t": rubbish} for h in batch]
+            payload = [{"a": "m", "n": h, "t": target} for h in batch]
             url = (f"{self.endpoint}?id={random.randint(0, 10 ** 9)}"
                    f"&sid={self.session_id}")
             reply = self._post(url, json.dumps(payload).encode(),

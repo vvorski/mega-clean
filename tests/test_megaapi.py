@@ -192,3 +192,23 @@ def test_nodes_in_the_rubbish_bin_are_not_indexed():
         _make_file_node("dead", "bin", "a.jpg", fingerprint=b64encode(bytes(19))),
     ]
     assert [f.handle for f in node_paths(nodes, MASTER)] == ["live"]
+
+
+def test_move_nodes_targets_an_arbitrary_folder_in_batches():
+    calls = []
+    def poster(url, data, timeout):
+        calls.append(json.loads(data)); return [0] * len(calls[-1])
+    api = MegaApi("S", MASTER, poster=poster)
+    out = api.move_nodes(["a", "b", "c"], "folderX", batch_size=2)
+    assert calls[0] == [{"a": "m", "n": "a", "t": "folderX"},
+                        {"a": "m", "n": "b", "t": "folderX"}]
+    assert out == {"a": 0, "b": 0, "c": 0}
+
+
+def test_node_names_decrypts_names_for_folders_and_files():
+    from megaclean.megaapi import node_names
+    nodes = [{"h": "root", "p": None, "t": 2},
+             _make_folder_node("f1", "root", "Photos"),
+             _make_file_node("n1", "f1", "a.jpg")]
+    names = node_names(nodes, MASTER)
+    assert names["f1"] == "Photos" and names["n1"] == "a.jpg"
