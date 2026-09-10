@@ -3,7 +3,8 @@ from megaclean.dupes import BKTree, Node, choose_keeper, cluster_nodes
 
 def node(path, **kw):
     base = dict(size=100, sig="s-" + path, exif_key=None, phash=None,
-                phash_src=None, width=None, height=None, mtime="2024-01-01")
+                phash_src=None, width=None, height=None, mtime="2024-01-01",
+                crc=None)
     base.update(kw)
     return Node(path=path, **base)
 
@@ -138,3 +139,24 @@ def test_variant_cluster_with_no_identical_members_has_no_exact_groups():
     nodes = [node("a.jpg", sig="A", exif_key="k"),
              node("b.jpg", sig="B", exif_key="k")]
     assert cluster_nodes(nodes)[0].exact_groups == ()
+
+
+def test_fingerprint_only_match_is_identical_not_exact():
+    """A CRC match is a candidate, not a proof; the report must say which."""
+    nodes = [node("a.jpg", sig="", crc="ABC"), node("b.jpg", sig="", crc="ABC")]
+    cluster = cluster_nodes(nodes)[0]
+    assert cluster.kind == "identical"
+    assert len(cluster.members) == 2
+
+
+def test_byte_verified_match_outranks_the_fingerprint():
+    nodes = [node("a.jpg", sig="same", crc="ABC"),
+             node("b.jpg", sig="same", crc="ABC")]
+    assert cluster_nodes(nodes)[0].kind == "exact"
+
+
+def test_fingerprint_agreeing_but_bytes_differing_is_a_variant():
+    """The measured 1-in-80 CRC false positive must not be reported as exact."""
+    nodes = [node("a.jpg", sig="one", crc="ABC"),
+             node("b.jpg", sig="two", crc="ABC")]
+    assert cluster_nodes(nodes)[0].kind == "variant"

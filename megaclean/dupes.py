@@ -19,11 +19,12 @@ class Node:
     width: int | None
     height: int | None
     mtime: str
+    crc: str | None = None
 
 
 @dataclass(frozen=True)
 class Cluster:
-    kind: str                      # "exact" | "variant"
+    kind: str                      # "exact" | "identical" | "variant"
     members: tuple[Node, ...]
     keeper: Node
 
@@ -111,6 +112,25 @@ def choose_keeper(nodes: Sequence[Node]) -> Node:
     return min(nodes, key=rank)
 
 
+def _kind_of(members: Sequence[Node]) -> str:
+    """How strong is the claim that these are the same file?
+
+    "exact" means their bytes were compared. "identical" means MEGA's stored
+    fingerprint matches -- a sparse CRC, right about 79 times in 80 on this
+    account, so it is a candidate rather than a proof. "variant" is the
+    heuristic tier: same shot, not the same bytes.
+    """
+    sigs = {m.sig for m in members if m.sig}
+    if sigs and len(sigs) == 1 and all(m.sig for m in members):
+        return "exact"
+    crcs = {m.crc for m in members if m.crc}
+    if crcs and len(crcs) == 1 and all(m.crc for m in members) and not sigs:
+        return "identical"
+    if sigs and len(sigs) > 1:
+        return "variant"
+    return "identical" if crcs and len(crcs) == 1 else "variant"
+
+
 def cluster_nodes(nodes: Sequence[Node], *,
                   phash_threshold: int = 6) -> list[Cluster]:
     by_path = {n.path: n for n in nodes}
@@ -118,7 +138,7 @@ def cluster_nodes(nodes: Sequence[Node], *,
     for path in by_path:
         uf.find(path)
 
-    for key in ("sig", "exif_key"):
+    for key in ("sig", "crc", "exif_key"):
         buckets: dict[str, list[str]] = defaultdict(list)
         for n in nodes:
             value = getattr(n, key)
@@ -152,7 +172,7 @@ def cluster_nodes(nodes: Sequence[Node], *,
         if len(members) < 2:
             continue
         members.sort(key=lambda n: n.path)
-        kind = "exact" if len({m.sig for m in members}) == 1 else "variant"
+        kind = _kind_of(members)
         clusters.append(Cluster(kind=kind, members=tuple(members),
                                 keeper=choose_keeper(members)))
     clusters.sort(key=lambda c: (c.kind, c.members[0].path))
@@ -163,12 +183,14 @@ def nodes_from_rows(rows: Iterable[Mapping]) -> list[Node]:
     """Build Nodes from index rows, dropping anything not yet fingerprinted."""
     nodes = []
     for row in rows:
-        if not row["sig"]:
+        has_crc = "crc" in row.keys() and row["crc"]
+        if not row["sig"] and not has_crc:
             continue
         nodes.append(Node(
-            path=row["path"], size=row["size"], sig=row["sig"],
+            path=row["path"], size=row["size"], sig=row["sig"] or "",
             exif_key=row["exif_key"], phash=row["phash"],
             phash_src=row["phash_src"], width=row["width"],
             height=row["height"], mtime=row["mtime"] or "",
+            crc=row["crc"] if "crc" in row.keys() else None,
         ))
     return nodes

@@ -10,7 +10,7 @@ import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS nodes (
@@ -24,11 +24,13 @@ CREATE TABLE IF NOT EXISTS nodes (
     phash_src  TEXT,
     width      INTEGER,
     height     INTEGER,
+    crc        TEXT,
     error      TEXT,
     PRIMARY KEY (scope, path)
 );
 CREATE INDEX IF NOT EXISTS idx_nodes_scope_size ON nodes (scope, size);
 CREATE INDEX IF NOT EXISTS idx_nodes_sig ON nodes (sig);
+CREATE INDEX IF NOT EXISTS idx_nodes_crc ON nodes (crc);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
@@ -40,12 +42,40 @@ def open_index(path: str | Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(_SCHEMA)
+    _migrate(conn)
     conn.execute(
         "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
         (str(SCHEMA_VERSION),),
     )
     conn.commit()
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns an older index predates, so existing scans stay usable."""
+    have = {r["name"] for r in conn.execute("PRAGMA table_info(nodes)")}
+    for column in ("crc",):
+        if column not in have:
+            conn.execute(f"ALTER TABLE nodes ADD COLUMN {column} TEXT")
+    conn.commit()
+
+
+def set_crc(conn: sqlite3.Connection, scope: str, path: str,
+            crc: str | None) -> None:
+    conn.execute("UPDATE nodes SET crc = ? WHERE scope = ? AND path = ?",
+                 (crc, scope, path))
+
+
+def crc_group_paths(conn: sqlite3.Connection, scope: str) -> list[str]:
+    """Paths whose content fingerprint is shared with at least one other file."""
+    rows = conn.execute(
+        """
+        SELECT path FROM nodes WHERE scope = ? AND crc IS NOT NULL AND crc IN (
+            SELECT crc FROM nodes WHERE scope = ? AND crc IS NOT NULL
+            GROUP BY crc HAVING COUNT(*) > 1
+        ) ORDER BY path
+        """, (scope, scope))
+    return [r["path"] for r in rows]
 
 
 def upsert_node(conn: sqlite3.Connection, scope: str, path: str, size: int,
@@ -62,6 +92,7 @@ def upsert_node(conn: sqlite3.Connection, scope: str, path: str, size: int,
             phash_src = CASE WHEN nodes.size = excluded.size THEN nodes.phash_src END,
             width     = CASE WHEN nodes.size = excluded.size THEN nodes.width END,
             height    = CASE WHEN nodes.size = excluded.size THEN nodes.height END,
+            crc       = CASE WHEN nodes.size = excluded.size THEN nodes.crc END,
             error     = CASE WHEN nodes.size = excluded.size THEN nodes.error END,
             size      = excluded.size
         """,

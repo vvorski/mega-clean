@@ -16,10 +16,11 @@ from .doctor import run_checks
 from .dupes import cluster_nodes, nodes_from_rows
 from .fingerprint import run_fingerprint
 from .index import (
-    clear_errors, iter_nodes, open_index, pending_paths, size_collision_paths,
-    upsert_node,
+    clear_errors, crc_group_paths, iter_nodes, open_index, pending_paths,
+    set_crc, size_collision_paths, upsert_node,
 )
 from .local import local_scope, scan_local
+from .megaapi import MegaApi, session_from_rclone
 from .planner import build_plan, read_plan, write_plan
 from .remote import RcloneRemote, Remote, join_remote_path
 from .report import summarize, write_csv, write_html
@@ -40,6 +41,54 @@ def _cmd_scan_remote(args, conn, make_remote) -> int:
         count += 1
     print(f"indexed {count} remote files under {args.remote}:{args.root}")
     return 0
+
+
+def _cmd_scan_fingerprints(args, conn, make_remote) -> int:
+    """Read content identity straight out of the account's metadata.
+
+    One API call returns the whole node tree, and every file node carries a
+    fingerprint MEGA's clients wrote at upload time. No file bytes are fetched.
+    """
+    session_id, master_key = session_from_rclone(args.remote)
+    print("fetching the account node tree ...")
+    files = MegaApi(session_id, master_key).files()
+    roots = tuple(r.strip("/") for r in args.root) if args.root else ()
+    kept = with_crc = 0
+    for f in files:
+        if roots and not f.path.startswith(roots):
+            continue
+        upsert_node(conn, "remote", f.path, f.size, "")
+        if f.crc:
+            set_crc(conn, "remote", f.path, f.crc.hex())
+            with_crc += 1
+        kept += 1
+    conn.commit()
+    print(f"decoded {len(files):,} files; indexed {kept:,}"
+          f"{' under ' + ', '.join(roots) if roots else ''}, "
+          f"{with_crc:,} with a content fingerprint")
+    return 0
+
+
+def _cmd_verify(args, conn, make_remote) -> int:
+    """Confirm fingerprint groups by actually reading bytes.
+
+    MEGA's fingerprint is a sparse CRC and was wrong once in 80 groups on this
+    account, so anything you intend to act on should be checked against the
+    files themselves.
+    """
+    sizes = {r["path"]: r["size"] for r in iter_nodes(conn, "remote")}
+    candidates = crc_group_paths(conn, "remote")
+    paths = pending_paths(conn, "remote", candidates)
+    if not paths:
+        print("nothing left to verify")
+        return 0
+    print(f"verifying {len(paths):,} files in fingerprint groups "
+          f"(workers={args.workers})")
+    with args.served_factory(args.remote) as remote:
+        ok, failed = run_fingerprint(conn, remote, "remote", paths,
+                                     workers=args.workers, sizes=sizes)
+    print(f"verified {ok:,}, failed {failed:,}")
+    return 0 if failed == 0 else 1
 
 
 def _cmd_fingerprint(args, conn, make_remote) -> int:
@@ -179,6 +228,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--retry", action="store_true",
                    help="retry files that previously errored")
     p.set_defaults(func=_cmd_fingerprint)
+
+    p = sub.add_parser("scan-fingerprints",
+                       help="read content identity from account metadata (fast)")
+    p.add_argument("--remote", default="mega")
+    p.add_argument("--root", action="append", default=[],
+                   help="restrict to a path prefix; repeatable")
+    p.set_defaults(func=_cmd_scan_fingerprints)
+
+    p = sub.add_parser("verify",
+                       help="confirm fingerprint groups by reading bytes")
+    p.add_argument("--remote", default="mega")
+    p.add_argument("--workers", type=int, default=8)
+    p.set_defaults(func=_cmd_verify)
 
     p = sub.add_parser("dupes", help="write the duplicate report")
     p.add_argument("--out", default="report.html")
