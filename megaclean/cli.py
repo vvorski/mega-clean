@@ -155,10 +155,19 @@ def _cmd_folders(args, conn, make_remote) -> int:
     decisions = merge_decisions(overlaps, prefer, args.min_coverage, inbox)
     print(f"{len(decisions)} folder decisions covering "
           f"{sum(d.shared_bytes for d in decisions) / 1e9:.2f} GB stored twice")
-    print(f"  remove outright (nothing unique): "
-          f"{sum(1 for d in decisions if d.must_move_files == 0)}")
-    print(f"  move files first: "
-          f"{sum(1 for d in decisions if d.must_move_files)}")
+    safe = sum(1 for d in decisions
+               if d.must_move_files == 0 and d.at_risk_files == 0
+               and not d.source_is_inbox)
+    print(f"  safe to remove outright: {safe}")
+    print(f"  move files first: {len(decisions) - safe}")
+    at_risk = sum(d.at_risk_files for d in decisions)
+    if at_risk:
+        print(f"  ⚠️ {at_risk:,} files have their only other copy in another "
+              f"folder this plan removes — flagged inline")
+    fp = sum(d.fingerprint_only_files for d in decisions)
+    if fp:
+        print(f"  {fp:,} shared files rest on fingerprint-only evidence — "
+              f"run verify before acting on them")
     print(f"plan written to {out}")
     return 0
 

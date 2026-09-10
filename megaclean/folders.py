@@ -310,8 +310,9 @@ def write_folder_plan(overlaps: Sequence[FolderOverlap], path: Path, *,
         if d.at_risk_files:
             lines += [
                 f"⚠️ **{d.at_risk_files:,} files ({_human(d.at_risk_bytes)}) "
-                f"here have their only other copy in a folder this plan is "
-                f"also removing.** Executing both decisions would lose them. "
+                f"here have their only other copy in a folder that is also "
+                f"being removed by this plan.** Executing both decisions "
+                f"would lose them. "
                 f"Move these into `{d.destination}` first:",
                 "",
             ]
