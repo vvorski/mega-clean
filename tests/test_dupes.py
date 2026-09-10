@@ -1,0 +1,103 @@
+from megaclean.dupes import BKTree, Node, choose_keeper, cluster_nodes
+
+
+def node(path, **kw):
+    base = dict(size=100, sig="s-" + path, exif_key=None, phash=None,
+                phash_src=None, width=None, height=None, mtime="2024-01-01")
+    base.update(kw)
+    return Node(path=path, **base)
+
+
+def test_bktree_finds_near_neighbours():
+    tree = BKTree()
+    for h in ("0000000000000000", "0000000000000003", "ffffffffffffffff"):
+        tree.add(h)
+    near = tree.query("0000000000000000", 6)
+    assert set(near) == {"0000000000000000", "0000000000000003"}
+
+
+def test_bktree_empty_query_is_safe():
+    assert BKTree().query("00", 6) == []
+
+
+def test_identical_signatures_form_an_exact_cluster():
+    nodes = [node("a.jpg", sig="same"), node("b.jpg", sig="same"),
+             node("c.jpg", sig="other")]
+    clusters = cluster_nodes(nodes)
+    assert len(clusters) == 1
+    assert clusters[0].kind == "exact"
+    assert {n.path for n in clusters[0].members} == {"a.jpg", "b.jpg"}
+
+
+def test_singletons_are_not_reported():
+    assert cluster_nodes([node("a.jpg"), node("b.jpg")]) == []
+
+
+def test_shared_exif_key_forms_a_variant_cluster():
+    nodes = [node("a.jpg", exif_key="canon|r5|2024", size=900),
+             node("b.jpg", exif_key="canon|r5|2024", size=300)]
+    clusters = cluster_nodes(nodes)
+    assert len(clusters) == 1
+    assert clusters[0].kind == "variant"
+
+
+def test_close_phash_forms_a_variant_cluster():
+    nodes = [node("a.jpg", phash="0000000000000000", phash_src="thumb"),
+             node("b.jpg", phash="0000000000000003", phash_src="thumb")]
+    assert cluster_nodes(nodes)[0].kind == "variant"
+
+
+def test_phash_across_provenance_is_never_compared():
+    nodes = [node("a.jpg", phash="0000000000000000", phash_src="thumb"),
+             node("b.jpg", phash="0000000000000000", phash_src="full")]
+    assert cluster_nodes(nodes) == []
+
+
+def test_distant_phash_does_not_cluster():
+    nodes = [node("a.jpg", phash="0000000000000000", phash_src="thumb"),
+             node("b.jpg", phash="ffffffffffffffff", phash_src="thumb")]
+    assert cluster_nodes(nodes) == []
+
+
+def test_exact_plus_variant_merges_into_one_variant_cluster():
+    nodes = [node("a.jpg", sig="same", exif_key="k"),
+             node("b.jpg", sig="same", exif_key="k"),
+             node("c.jpg", sig="different", exif_key="k")]
+    clusters = cluster_nodes(nodes)
+    assert len(clusters) == 1
+    assert clusters[0].kind == "variant"
+    assert len(clusters[0].members) == 3
+
+
+def test_keeper_prefers_largest_pixel_area():
+    a = node("a.jpg", width=100, height=100, size=999999)
+    b = node("b.jpg", width=400, height=400, size=10)
+    assert choose_keeper([a, b]).path == "b.jpg"
+
+
+def test_keeper_falls_back_to_size_then_mtime_then_depth():
+    a = node("deep/nested/a.jpg", size=100, mtime="2024-01-02")
+    b = node("b.jpg", size=100, mtime="2024-01-01")
+    assert choose_keeper([a, b]).path == "b.jpg"
+    c = node("x/c.jpg", size=100, mtime="2024-01-01")
+    d = node("d.jpg", size=100, mtime="2024-01-01")
+    assert choose_keeper([c, d]).path == "d.jpg"
+
+
+def test_keeper_is_deterministic_regardless_of_input_order():
+    nodes = [node(f"{c}.jpg", size=100, mtime="2024-01-01") for c in "abcd"]
+    assert choose_keeper(nodes).path == choose_keeper(list(reversed(nodes))).path
+
+
+def test_nodes_from_rows_skips_unfingerprinted():
+    from megaclean.dupes import nodes_from_rows
+    rows = [
+        {"path": "a.jpg", "size": 10, "sig": "s", "exif_key": None,
+         "phash": None, "phash_src": None, "width": None, "height": None,
+         "mtime": "t"},
+        {"path": "b.jpg", "size": 10, "sig": None, "exif_key": None,
+         "phash": None, "phash_src": None, "width": None, "height": None,
+         "mtime": "t"},
+    ]
+    nodes = nodes_from_rows(rows)
+    assert [n.path for n in nodes] == ["a.jpg"]
