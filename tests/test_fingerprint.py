@@ -85,3 +85,30 @@ def test_rerun_skips_already_fingerprinted(make_jpeg, tmp_path):
                     targets_for(conn, "remote", pending_ids(conn, "remote")),
                     workers=1)
     assert len(remote.reads) == before
+
+
+def test_head_bytes_are_handed_to_the_callback(make_jpeg, tmp_path):
+    """Thumbnails reuse the verification read rather than fetching again."""
+    data = (make_jpeg(tmp_path / "a.jpg")).read_bytes()
+    remote = CountingRemote({"a.jpg": data})
+    conn = open_index(tmp_path / "i.db")
+    upsert_node(conn, "remote", "a.jpg", len(data), "t", node_id="h1")
+    seen = {}
+    run_fingerprint(conn, remote, "remote", [("h1", "a.jpg", len(data))],
+                    workers=1, on_head=lambda nid, head: seen.update({nid: head}))
+    assert list(seen) == ["h1"]
+    assert seen["h1"] == data[:65536]
+    assert len(remote.reads) == 1        # no extra fetch for the thumbnail
+
+
+def test_a_failing_callback_does_not_fail_the_run(make_jpeg, tmp_path):
+    data = (make_jpeg(tmp_path / "a.jpg")).read_bytes()
+    remote = FakeRemote({"a.jpg": data})
+    conn = open_index(tmp_path / "i.db")
+    upsert_node(conn, "remote", "a.jpg", len(data), "t", node_id="h1")
+    def boom(node_id, head):
+        raise OSError("disk full")
+    ok, failed = run_fingerprint(conn, remote, "remote",
+                                 [("h1", "a.jpg", len(data))], workers=1,
+                                 on_head=boom)
+    assert (ok, failed) == (1, 0)

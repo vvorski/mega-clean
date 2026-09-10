@@ -25,6 +25,7 @@ from .planner import build_plan, read_plan, write_plan
 from .remote import RcloneRemote, Remote, join_remote_path
 from .report import summarize, write_csv, write_html
 from .served import ServedRemote
+from .thumbs import write_thumbnail
 from .uploader import execute_plan
 
 DEFAULT_DB = ".megaclean/index.db"
@@ -84,11 +85,19 @@ def _cmd_verify(args, conn, make_remote) -> int:
         print("nothing left to verify")
         return 0
     targets = targets_for(conn, "remote", node_ids)
+    thumb_root = Path(args.thumbs) if args.thumbs else None
+    on_head = None
+    if thumb_root is not None:
+        # The 64 KB we fetch to verify bytes is also enough to build the
+        # gallery preview, so the pictures cost no extra transfer.
+        def on_head(node_id, head, _root=thumb_root):
+            write_thumbnail(_root, node_id, head)
     print(f"verifying {len(targets):,} files in fingerprint groups "
-          f"(workers={args.workers})")
+          f"(workers={args.workers})"
+          + (f", writing thumbnails to {thumb_root}" if thumb_root else ""))
     with args.served_factory(args.remote) as remote:
         ok, failed = run_fingerprint(conn, remote, "remote", targets,
-                                     workers=args.workers)
+                                     workers=args.workers, on_head=on_head)
     print(f"verified {ok:,}, failed {failed:,}")
     return 0 if failed == 0 else 1
 
@@ -241,6 +250,9 @@ def build_parser() -> argparse.ArgumentParser:
                        help="confirm fingerprint groups by reading bytes")
     p.add_argument("--remote", default="mega")
     p.add_argument("--workers", type=int, default=8)
+    p.add_argument("--thumbs", default=None,
+                   help="also write gallery thumbnails to this directory, "
+                        "reusing the bytes already fetched")
     p.set_defaults(func=_cmd_verify)
 
     p = sub.add_parser("dupes", help="write the duplicate report")

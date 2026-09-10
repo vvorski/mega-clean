@@ -44,19 +44,25 @@ def fingerprint_from_parts(size: int, head: bytes, tail: bytes) -> Fingerprint:
 
 
 def fetch_fingerprint(remote: Remote, path: str, size: int) -> Fingerprint:
+    return fetch_fingerprint_and_head(remote, path, size)[0]
+
+
+def fetch_fingerprint_and_head(remote: Remote, path: str,
+                               size: int) -> tuple[Fingerprint, bytes]:
+    """Also hand back the head buffer, so callers can reuse the bytes."""
     head = remote.read_range(path, 0, HEAD_BYTES)
     tail = (remote.read_range(path, -TAIL_BYTES, TAIL_BYTES)
             if needs_tail_read(size) else b"")
-    return fingerprint_from_parts(size, head, tail)
+    return fingerprint_from_parts(size, head, tail), head
 
 
 def _fetch_with_backoff(remote: Remote, path: str, size: int,
-                        max_attempts: int) -> Fingerprint:
+                        max_attempts: int) -> tuple[Fingerprint, bytes]:
     """MEGA throttles aggressive clients, so back off rather than hammer it."""
     last: Exception | None = None
     for attempt in range(max_attempts):
         try:
-            return fetch_fingerprint(remote, path, size)
+            return fetch_fingerprint_and_head(remote, path, size)
         except RemoteError as exc:
             last = exc
             if attempt == max_attempts - 1:
@@ -69,6 +75,7 @@ def _fetch_with_backoff(remote: Remote, path: str, size: int,
 def run_fingerprint(conn, remote: Remote, scope: str,
                     targets: Sequence[tuple[str, str, int]], *,
                     workers: int = 8, max_attempts: int = MAX_ATTEMPTS,
+                    on_head: Callable[[str, bytes], None] | None = None,
                     on_progress: Callable[[str, bool], None] | None = None
                     ) -> tuple[int, int]:
     """Fingerprint `paths`, writing each result as it lands.
@@ -88,7 +95,7 @@ def run_fingerprint(conn, remote: Remote, scope: str,
         for future in as_completed(futures):
             node_id, path = futures[future]
             try:
-                fp = future.result()
+                fp, head = future.result()
             except Exception as exc:
                 set_error(conn, scope, node_id, str(exc))
                 failed += 1
@@ -99,6 +106,11 @@ def run_fingerprint(conn, remote: Remote, scope: str,
             set_signature(conn, scope, node_id, sig=fp.sig, exif_key=fp.exif_key,
                           phash=fp.phash, phash_src=fp.phash_src,
                           width=fp.width, height=fp.height)
+            if on_head is not None:
+                try:
+                    on_head(node_id, head)
+                except Exception:
+                    log.debug("on_head failed for %s", path, exc_info=True)
             ok += 1
             if on_progress:
                 on_progress(path, True)
