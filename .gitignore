@@ -1,0 +1,6 @@
+.megaclean/
+__pycache__/
+*.pyc
+.venv/
+plan.json
+report.html
