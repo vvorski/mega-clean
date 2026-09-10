@@ -147,7 +147,8 @@ def _cmd_previews(args, conn, make_remote) -> int:
     if not nodes:
         print("nothing indexed — run scan-fingerprints first", file=sys.stderr)
         return 1
-    clusters = cluster_nodes(nodes, phash_threshold=args.threshold)
+    clusters = cluster_nodes(nodes, phash_threshold=args.threshold,
+                             prefer=tuple(args.prefer))
     root = Path(args.thumbs)
     targets = preview_targets(clusters, root, limit=args.limit,
                               force=args.force)
@@ -170,7 +171,8 @@ def _cmd_dupes(args, conn, make_remote) -> int:
     if not nodes:
         print("no fingerprinted files — run fingerprint first", file=sys.stderr)
         return 1
-    clusters = cluster_nodes(nodes, phash_threshold=args.threshold)
+    clusters = cluster_nodes(nodes, phash_threshold=args.threshold,
+                             prefer=tuple(args.prefer))
     write_html(clusters, Path(args.out))
     if args.csv:
         write_csv(clusters, Path(args.csv))
@@ -301,6 +303,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="only the N groups with the most reclaimable space")
     p.add_argument("--workers", type=int, default=8)
     p.add_argument("--threshold", type=int, default=6)
+    p.add_argument("--prefer", action="append", default=[],
+                   help="path prefix of a canonical folder; the keeper is "
+                        "chosen from here when quality is equal. Repeatable, "
+                        "best first")
     p.add_argument("--max-bytes", type=int, default=12 * 1024 * 1024,
                    help="per-file cap on how much is fetched")
     p.add_argument("--force", action="store_true",
@@ -312,6 +318,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--csv", default=None)
     p.add_argument("--threshold", type=int, default=6,
                    help="perceptual hash Hamming distance")
+    p.add_argument("--prefer", action="append", default=[],
+                   help="path prefix of a canonical folder; the keeper is "
+                        "chosen from here when quality is equal. Repeatable, "
+                        "best first")
     p.add_argument("--gallery", default=None,
                    help="also write a browsable gallery into this directory")
     p.add_argument("--thumbs", default=".megaclean/thumbs",

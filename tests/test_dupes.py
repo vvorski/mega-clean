@@ -200,3 +200,43 @@ def test_primary_keeper_is_among_the_keepers():
              node("b.jpg", sig="B", exif_key="k")]
     c = cluster_nodes(nodes)[0]
     assert c.keeper.key in c.keeper_keys
+
+
+def test_prefer_keeps_the_copy_in_the_canonical_folder():
+    """An auto-syncing inbox is machine-managed; the keeper belongs in the
+    curated library even when the inbox path is shorter."""
+    inbox = node("Camera uploads/a.jpg", sig="same")
+    library = node("Library/2024/a.jpg", sig="same")
+    cluster = cluster_nodes([inbox, library], prefer=("Library",))[0]
+    assert cluster.keeper.path == "Library/2024/a.jpg"
+
+
+def test_without_prefer_the_shallower_path_still_wins():
+    inbox = node("Camera uploads/a.jpg", sig="same")
+    library = node("Library/2024/a.jpg", sig="same")
+    assert cluster_nodes([inbox, library])[0].keeper.path == "Camera uploads/a.jpg"
+
+
+def test_prefer_order_breaks_ties_between_two_preferred_folders():
+    a = node("First/a.jpg", sig="same")
+    b = node("Second/a.jpg", sig="same")
+    cluster = cluster_nodes([a, b], prefer=("Second", "First"))[0]
+    assert cluster.keeper.path == "Second/a.jpg"
+
+
+def test_prefer_applies_to_every_distinct_photo_in_a_variant_cluster():
+    nodes = [node("Camera uploads/x.jpg", sig="A", exif_key="k"),
+             node("Library/x.jpg", sig="A", exif_key="k"),
+             node("Camera uploads/y.jpg", sig="B", exif_key="k"),
+             node("Library/y.jpg", sig="B", exif_key="k")]
+    cluster = cluster_nodes(nodes, prefer=("Library",))[0]
+    kept = {m.path for m in cluster.members if m.key in cluster.keeper_keys}
+    assert kept == {"Library/x.jpg", "Library/y.jpg"}
+
+
+def test_prefer_never_overrides_image_quality():
+    """A bigger version outside the preferred folder is still the better copy."""
+    small = node("Library/a.jpg", sig="A", exif_key="k", width=100, height=100)
+    big = node("Camera uploads/a.jpg", sig="B", exif_key="k", width=900, height=900)
+    keeper = choose_keeper([small, big], prefer=("Library",))
+    assert keeper.path == "Camera uploads/a.jpg"
