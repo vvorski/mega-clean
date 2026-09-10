@@ -16,6 +16,10 @@ from PIL import Image, ImageFile
 # normal case here, not an error. Set explicitly rather than relying on another
 # module having been imported first.
 ImageFile.LOAD_TRUNCATED_IMAGES = True
+# Pillow's decompression-bomb guard assumes untrusted input. These are the
+# user's own photos and panoramas legitimately run to nine figures of pixels,
+# so raise the ceiling rather than skip them -- but keep a ceiling.
+Image.MAX_IMAGE_PIXELS = 500_000_000
 
 log = logging.getLogger(__name__)
 
