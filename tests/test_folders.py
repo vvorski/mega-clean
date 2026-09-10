@@ -189,3 +189,38 @@ def test_an_inbox_is_drained_never_removed(tmp_path):
     text = out.read_text()
     assert "remove `Inbox`" not in text
     assert "still to file" in text.lower()
+
+
+def test_chained_decisions_are_flagged_so_ordering_cannot_destroy_files():
+    """If B is removed by one decision but is the destination of another,
+    doing them in the listed order moves files into a deleted folder."""
+    from megaclean.folders import merge_decisions, chained_decisions
+    # A collapses into B (B is bigger); B collapses into C (C has unique
+    # content and shares more bytes with B than A does).
+    ab = [n(f"A/{i}.jpg", size=10) for i in range(3)]
+    bb = [n(f"B/{i}.jpg", size=10) for i in range(3)]
+    bc = [n(f"B/x{i}.jpg", size=900) for i in range(3)]
+    cc = [n(f"C/x{i}.jpg", size=900) for i in range(3)]
+    c_only = [n(f"C/only{i}.jpg", size=5) for i in range(2)]
+    clusters = ([cluster(x, y) for x, y in zip(ab, bb)]
+                + [cluster(x, y) for x, y in zip(bc, cc)])
+    decisions = merge_decisions(
+        analyse_folders(clusters, ab + bb + bc + cc + c_only, min_files=1))
+    chains = chained_decisions(decisions)
+    destinations = {d.destination for d in decisions}
+    sources = {d.source for d in decisions}
+    assert destinations & sources                # the setup really is chained
+    assert chains
+
+
+def test_independent_decisions_are_not_flagged():
+    from megaclean.folders import merge_decisions, chained_decisions
+    a = [n(f"A/{i}.jpg") for i in range(3)]
+    b = [n(f"B/{i}.jpg") for i in range(3)]
+    c = [n(f"C/{i}.jpg", size=5) for i in range(3)]
+    d = [n(f"D/{i}.jpg", size=5) for i in range(3)]
+    clusters = ([cluster(x, y) for x, y in zip(a, b)]
+                + [cluster(x, y) for x, y in zip(c, d)])
+    decisions = merge_decisions(analyse_folders(clusters, a + b + c + d,
+                                                min_files=1))
+    assert chained_decisions(decisions) == []

@@ -177,6 +177,23 @@ def merge_decisions(overlaps: Sequence[FolderOverlap],
     return decisions
 
 
+def chained_decisions(decisions: Sequence[MergeDecision]
+                      ) -> list[tuple[str, int, int]]:
+    """Folders that are removed by one decision and written to by another.
+
+    Executing the list top-down would then move files into a folder that has
+    already gone. Each entry is (folder, decision_removing_it,
+    decision_writing_into_it), numbered as the plan numbers them.
+    """
+    removed = {d.source: i for i, d in enumerate(decisions, start=1)
+               if not d.source_is_inbox}
+    chains = []
+    for i, d in enumerate(decisions, start=1):
+        if d.destination in removed:
+            chains.append((d.destination, removed[d.destination], i))
+    return sorted(chains, key=lambda row: row[1])
+
+
 def _human(n: int) -> str:
     value = float(n)
     for unit in ("B", "KB", "MB", "GB", "TB"):
@@ -210,9 +227,29 @@ def write_folder_plan(overlaps: Sequence[FolderOverlap], path: Path, *,
         lines += [f"Canonical folders (these survive): "
                   + ", ".join(f"`{p}`" for p in prefer), ""]
 
-    for i, d in enumerate(decisions, start=1):
+    chains = chained_decisions(decisions)
+    if chains:
         lines += [
-            f"## {i}. `{d.source}`  →  `{d.destination}`",
+            "> **Order matters for a few of these.** The folders below are "
+            "removed by one decision and used as a destination by another, so "
+            "doing them in listed order would move files into a folder that is "
+            "already gone. Do the later decision first, or pick a different "
+            "destination.",
+            "",
+        ]
+        for folder, removed_by, written_by in chains:
+            lines.append(f">  - `{folder}` — removed by #{removed_by}, "
+                         f"written into by #{written_by}: do #{written_by} first")
+        lines.append("")
+
+    for i, d in enumerate(decisions, start=1):
+        warn = ""
+        if any(d.destination == f for f, _, _ in chains):
+            warn = "  ⚠️ destination is removed by another decision"
+        elif any(d.source == f for f, _, _ in chains):
+            warn = "  ⚠️ another decision writes into this folder"
+        lines += [
+            f"## {i}. `{d.source}`  →  `{d.destination}`{warn}",
             "",
             f"- {d.shared_files:,} files ({_human(d.shared_bytes)}) are in both",
             f"- unique to `{d.source}`: {d.must_move_files:,} files "
