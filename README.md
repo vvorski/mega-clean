@@ -20,9 +20,10 @@ pip install -e '.[dev]'
 megaclean doctor --remote mega
 ```
 
-If the account uses two-factor auth, rclone's mega backend cannot log in;
-install MEGAcmd (`brew install megacmd`), authenticate there, and configure
-rclone against the same account.
+If the account uses two-factor auth, `rclone config` will prompt for a one-time
+code (the backend's `2fa` option); it uses that once to establish a session, so
+you are not asked again on later runs. MEGAcmd is optional and not needed for
+any of this.
 
 Run `megaclean doctor` before anything else. It verifies the assumption the
 whole design rests on: that `rclone cat --offset` fetches only the range asked

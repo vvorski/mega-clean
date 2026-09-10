@@ -49,8 +49,9 @@ def check_remote_configured(remote: str, runner: Callable = subprocess.run,
         return Check("remote", True, f"{remote}: configured")
     return Check("remote", False,
                  f"no rclone remote named {remote!r}; configured: "
-                 f"{', '.join(configured) or 'none'}. Run `rclone config`, or "
-                 f"log in with MEGAcmd first if the account uses 2FA")
+                 f"{', '.join(configured) or 'none'}. Run `rclone config` "
+                 f"and pick the mega backend; it prompts for a one-time code "
+                 f"if the account uses 2FA")
 
 
 def check_range_reads(remote: Remote, samples: Sequence[tuple[str, int]],
