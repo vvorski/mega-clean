@@ -22,9 +22,12 @@ def test_payload_ranks_groups_by_reclaimable_bytes():
     assert groups[0]["wasted"] == 500
 
 
-def test_payload_marks_the_keeper_exactly_once_per_group():
-    for g in build_payload(clusters())["groups"]:
-        assert sum(1 for m in g["members"] if m["keep"]) == 1
+def test_payload_keeps_one_copy_of_each_distinct_content():
+    groups = {g["kind"]: g for g in build_payload(clusters())["groups"]}
+    # Identical copies: keep one.
+    assert sum(1 for m in groups["exact"]["members"] if m["keep"]) == 1
+    # Different pictures that merely matched as variants: keep them all.
+    assert all(m["keep"] for m in groups["variant"]["members"])
 
 
 def test_payload_distinguishes_same_named_siblings_by_node_id():
@@ -48,11 +51,11 @@ def test_payload_reports_verification_state():
     assert payload["totals"]["unverified_groups"] == 1
 
 
-def test_totals_count_redundancy(tmp_path):
+def test_totals_count_only_removable_copies(tmp_path):
     t = build_payload(clusters())["totals"]
     assert t["groups"] == 2
-    assert t["redundant_files"] == 2
-    assert t["reclaimable"] == 700
+    assert t["redundant_files"] == 1
+    assert t["reclaimable"] == 500
 
 
 def test_gallery_writes_a_page_with_embedded_data(tmp_path):

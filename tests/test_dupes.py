@@ -160,3 +160,43 @@ def test_fingerprint_agreeing_but_bytes_differing_is_a_variant():
     nodes = [node("a.jpg", sig="one", crc="ABC"),
              node("b.jpg", sig="two", crc="ABC")]
     assert cluster_nodes(nodes)[0].kind == "variant"
+
+
+def test_variant_cluster_keeps_one_of_each_distinct_photo():
+    """Burst frames cluster together because they share EXIF, but they are
+    different pictures. Marking all but one 'duplicate' would destroy them."""
+    frames = [
+        node("burst1-a.jpg", sig="A", exif_key="k"),
+        node("burst1-b.jpg", sig="A", exif_key="k"),
+        node("burst2-a.jpg", sig="B", exif_key="k"),
+        node("burst2-b.jpg", sig="B", exif_key="k"),
+        node("burst3.jpg", sig="C", exif_key="k"),
+    ]
+    cluster = cluster_nodes(frames)[0]
+    assert cluster.kind == "variant"
+    # One keeper per distinct content, not one per cluster.
+    assert len(cluster.keeper_keys) == 3
+    redundant = [m for m in cluster.members if m.key not in cluster.keeper_keys]
+    assert len(redundant) == 2
+    kept_sigs = {m.sig for m in cluster.members if m.key in cluster.keeper_keys}
+    assert kept_sigs == {"A", "B", "C"}
+
+
+def test_a_unique_photo_in_a_variant_cluster_is_never_a_duplicate():
+    nodes = [node("a.jpg", sig="A", exif_key="k"),
+             node("b.jpg", sig="B", exif_key="k")]
+    cluster = cluster_nodes(nodes)[0]
+    assert len(cluster.keeper_keys) == 2      # nothing is redundant here
+
+
+def test_exact_cluster_still_keeps_exactly_one():
+    nodes = [node("a.jpg", sig="same"), node("b.jpg", sig="same"),
+             node("c.jpg", sig="same")]
+    assert len(cluster_nodes(nodes)[0].keeper_keys) == 1
+
+
+def test_primary_keeper_is_among_the_keepers():
+    nodes = [node("a.jpg", sig="A", exif_key="k"),
+             node("b.jpg", sig="B", exif_key="k")]
+    c = cluster_nodes(nodes)[0]
+    assert c.keeper.key in c.keeper_keys

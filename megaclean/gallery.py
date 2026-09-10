@@ -21,7 +21,7 @@ log = logging.getLogger(__name__)
 
 
 def _wasted(cluster: Cluster) -> int:
-    return sum(m.size for m in cluster.members if m.key != cluster.keeper.key)
+    return sum(m.size for m in cluster.members if m.key not in cluster.keeper_keys)
 
 
 def build_payload(clusters: Sequence[Cluster], *,
@@ -53,7 +53,7 @@ def build_payload(clusters: Sequence[Cluster], *,
                 "name": m.path.rsplit("/", 1)[-1],
                 "dir": m.path.rsplit("/", 1)[0] if "/" in m.path else "",
                 "size": m.size,
-                "keep": m.key == cluster.keeper.key,
+                "keep": m.key in cluster.keeper_keys,
                 "w": m.width,
                 "h": m.height,
             }
@@ -73,7 +73,8 @@ def build_payload(clusters: Sequence[Cluster], *,
             "members": members,
         })
 
-    redundant = [m for c in clusters for m in c.members if m.key != c.keeper.key]
+    redundant = [m for c in clusters for m in c.members
+                 if m.key not in c.keeper_keys]
     totals = {
         "groups": len(clusters),
         "redundant_files": len(redundant),

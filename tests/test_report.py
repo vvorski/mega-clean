@@ -15,13 +15,15 @@ def clusters():
     return [Cluster("exact", (a, b), a), Cluster("variant", (c, d), c)]
 
 
-def test_summary_counts_redundancy_not_totals():
+def test_summary_counts_only_genuinely_redundant_copies():
+    """c.jpg and d.jpg are a variant pair with different content, so neither is
+    redundant; only the byte-identical b.jpg is."""
     s = summarize(clusters())
     assert s["clusters"] == 2
     assert s["exact_clusters"] == 1
     assert s["variant_clusters"] == 1
-    assert s["redundant_files"] == 2
-    assert s["redundant_bytes"] == 700
+    assert s["redundant_files"] == 1
+    assert s["redundant_bytes"] == 500
 
 
 def test_csv_marks_keeper_and_duplicate_roles(tmp_path):
@@ -29,9 +31,11 @@ def test_csv_marks_keeper_and_duplicate_roles(tmp_path):
     write_csv(clusters(), out)
     rows = list(csv.DictReader(out.open()))
     assert len(rows) == 4
-    assert {r["role"] for r in rows} == {"keeper", "duplicate"}
-    keepers = [r["path"] for r in rows if r["role"] == "keeper"]
-    assert sorted(keepers) == ["a.jpg", "c.jpg"]
+    keepers = sorted(r["path"] for r in rows if r["role"] == "keeper")
+    dupes = sorted(r["path"] for r in rows if r["role"] == "duplicate")
+    # Distinct content is always kept; only the identical copy is a duplicate.
+    assert keepers == ["a.jpg", "c.jpg", "d.jpg"]
+    assert dupes == ["b.jpg"]
     assert len({r["cluster_id"] for r in rows}) == 2
 
 

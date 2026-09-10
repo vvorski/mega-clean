@@ -35,6 +35,27 @@ class Cluster:
     keeper: Node
 
     @property
+    def content_groups(self) -> tuple[tuple[Node, ...], ...]:
+        """Members partitioned by actual content, singletons included.
+
+        Redundancy exists only inside one of these partitions. A variant match
+        says "same photo", which for burst frames or edits is not the same file
+        -- treating those as deletable would lose real pictures.
+        """
+        buckets: dict[str, list[Node]] = defaultdict(list)
+        for member in self.members:
+            buckets[member.sig or f"crc:{member.crc}" or member.key].append(member)
+        groups = [tuple(sorted(g, key=lambda n: (n.path, n.key)))
+                  for g in buckets.values()]
+        groups.sort(key=lambda g: g[0].path)
+        return tuple(groups)
+
+    @property
+    def keeper_keys(self) -> frozenset[str]:
+        """One keeper per distinct content; everything else is truly redundant."""
+        return frozenset(choose_keeper(list(g)).key for g in self.content_groups)
+
+    @property
     def exact_groups(self) -> tuple[tuple[Node, ...], ...]:
         """Members that are byte-identical to each other, grouped.
 

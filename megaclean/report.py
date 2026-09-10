@@ -29,8 +29,10 @@ def _exact_group_labels(cluster) -> dict[str, str]:
 
 def summarize(clusters: Sequence[Cluster]) -> dict[str, int]:
     """Redundancy, not totals: what could be reclaimed if every keeper stayed."""
-    # Compared by key, not path: two files in one MEGA folder can share a name.
-    redundant = [m for c in clusters for m in c.members if m.key != c.keeper.key]
+    # Redundant means "another copy of this exact content is kept", not merely
+    # "in a cluster with something". Variant clusters hold distinct pictures.
+    redundant = [m for c in clusters for m in c.members
+                 if m.key not in c.keeper_keys]
     return {
         "clusters": len(clusters),
         "exact_clusters": sum(1 for c in clusters if c.kind == "exact"),
@@ -51,7 +53,7 @@ def write_csv(clusters: Sequence[Cluster], path: Path) -> None:
                 writer.writerow({
                     "cluster_id": i,
                     "kind": cluster.kind,
-                    "role": ("keeper" if member.key == cluster.keeper.key
+                    "role": ("keeper" if member.key in cluster.keeper_keys
                              else "duplicate"),
                     "exact_group": labels.get(member.path, ""),
                     "path": member.path,
@@ -111,7 +113,7 @@ def write_html(clusters: Sequence[Cluster], path: Path, *, account: str = "",
         parts.append("<table><tr><th>Role</th><th>Path</th><th>Size</th>"
                      "<th>Dimensions</th><th>Modified</th></tr>")
         for member in cluster.members:
-            keeper = member.key == cluster.keeper.key
+            keeper = member.key in cluster.keeper_keys
             dims = (f"{member.width}×{member.height}"
                     if member.width and member.height else "—")
             label = labels.get(member.key)

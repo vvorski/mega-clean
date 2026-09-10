@@ -23,7 +23,7 @@ DEFAULT_MAX_BYTES = 12 * 1024 * 1024
 
 
 def _wasted(cluster: Cluster) -> int:
-    return sum(m.size for m in cluster.members if m.key != cluster.keeper.key)
+    return sum(m.size for m in cluster.members if m.key not in cluster.keeper_keys)
 
 
 def preview_targets(clusters: Sequence[Cluster], thumb_root: Path, *,
