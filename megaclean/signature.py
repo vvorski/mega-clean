@@ -7,6 +7,20 @@ enough to separate photos that merely share a byte size.
 from __future__ import annotations
 
 import hashlib
+import io
+import logging
+
+import exifread
+import imagehash
+import pillow_heif
+from PIL import Image, ImageFile
+
+pillow_heif.register_heif_opener()
+# A 64 KB head buffer is a truncated image by construction; decoding it is
+# expected and the partial result is good enough for a perceptual hash.
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+log = logging.getLogger(__name__)
 
 HEAD_BYTES = 65536
 TAIL_BYTES = 65536
@@ -32,14 +46,6 @@ def signature_of_bytes(data: bytes) -> str:
     if needs_tail_read(size):
         return content_signature(size, data[:HEAD_BYTES], data[-TAIL_BYTES:])
     return content_signature(size, data, b"")
-
-
-import io
-import logging
-
-import exifread
-
-log = logging.getLogger(__name__)
 
 _EXIF_FIELDS = (
     "Image Make",
@@ -88,3 +94,43 @@ def embedded_thumbnail(head: bytes) -> bytes | None:
     if isinstance(thumb, (bytes, bytearray)) and len(thumb) > 0:
         return bytes(thumb)
     return None
+
+
+def _open(data: bytes) -> "Image.Image | None":
+    try:
+        img = Image.open(io.BytesIO(data))
+        img.load()
+        return img.convert("RGB")
+    except Exception:
+        log.debug("image decode failed", exc_info=True)
+        return None
+
+
+def perceptual_hash(head: bytes) -> tuple[str, str] | None:
+    """Return (hex_hash, provenance).
+
+    The camera-embedded thumbnail is preferred because it is fully present in
+    the head buffer, whereas the main image is truncated. Hashes must only be
+    compared within the same provenance class.
+    """
+    thumb = embedded_thumbnail(head)
+    if thumb:
+        img = _open(thumb)
+        if img is not None:
+            return str(imagehash.phash(img)), "thumb"
+    img = _open(head)
+    if img is not None:
+        return str(imagehash.phash(img)), "full"
+    return None
+
+
+def image_dimensions(head: bytes) -> tuple[int, int] | None:
+    try:
+        with Image.open(io.BytesIO(head)) as img:
+            return img.size
+    except Exception:
+        return None
+
+
+def hamming_hex(a: str, b: str) -> int:
+    return bin(int(a, 16) ^ int(b, 16)).count("1")
