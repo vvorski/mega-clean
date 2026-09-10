@@ -14,3 +14,7 @@ venv/
 
 # macOS
 .DS_Store
+
+# Generated reports contain real file paths and photo thumbnails
+report/
+*.megaclean/
