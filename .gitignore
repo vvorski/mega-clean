@@ -1,6 +1,16 @@
+# Index and generated output
 .megaclean/
-__pycache__/
-*.pyc
-.venv/
 plan.json
 report.html
+report.csv
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# macOS
+.DS_Store
