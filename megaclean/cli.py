@@ -12,6 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from . import __version__
+from .doctor import run_checks
 from .dupes import cluster_nodes, nodes_from_rows
 from .fingerprint import run_fingerprint
 from .index import (
@@ -128,6 +129,14 @@ def _cmd_upload(args, conn, make_remote) -> int:
     return 0 if result.failed == 0 else 1
 
 
+def _cmd_doctor(args, conn, make_remote) -> int:
+    samples = [(r["path"], r["size"]) for r in iter_nodes(conn, "remote")]
+    checks = run_checks(args.remote, make_remote(args.remote), samples)
+    for check in checks:
+        print(f"[{'ok' if check.ok else 'FAIL'}] {check.name}: {check.detail}")
+    return 0 if all(c.ok for c in checks) else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="megaclean",
@@ -184,6 +193,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="also upload entries flagged as possible variants")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=_cmd_upload)
+
+    p = sub.add_parser("doctor", help="verify the environment and assumptions")
+    p.add_argument("--remote", default="mega")
+    p.set_defaults(func=_cmd_doctor)
     return parser
 
 
