@@ -9,8 +9,22 @@ from pathlib import Path
 
 from .dupes import Cluster
 
-_CSV_COLUMNS = ["cluster_id", "kind", "role", "path", "size", "width",
-                "height", "mtime"]
+_CSV_COLUMNS = ["cluster_id", "kind", "role", "exact_group", "path", "size",
+                "width", "height", "mtime"]
+
+
+def _exact_group_labels(cluster) -> dict[str, str]:
+    """Label each member that is byte-identical to another member.
+
+    A variant cluster only claims its members are the same photo, which is a
+    heuristic. Members sharing a signature are provably the same bytes, and
+    that is the part you can act on with confidence.
+    """
+    labels: dict[str, str] = {}
+    for i, group in enumerate(cluster.exact_groups, start=1):
+        for member in group:
+            labels[member.path] = str(i)
+    return labels
 
 
 def summarize(clusters: Sequence[Cluster]) -> dict[str, int]:
@@ -31,12 +45,14 @@ def write_csv(clusters: Sequence[Cluster], path: Path) -> None:
         writer = csv.DictWriter(fh, fieldnames=_CSV_COLUMNS)
         writer.writeheader()
         for i, cluster in enumerate(clusters, start=1):
+            labels = _exact_group_labels(cluster)
             for member in cluster.members:
                 writer.writerow({
                     "cluster_id": i,
                     "kind": cluster.kind,
                     "role": ("keeper" if member.path == cluster.keeper.path
                              else "duplicate"),
+                    "exact_group": labels.get(member.path, ""),
                     "path": member.path,
                     "size": member.size,
                     "width": member.width or "",
@@ -66,6 +82,8 @@ def write_html(clusters: Sequence[Cluster], path: Path, *, account: str = "",
         "table{border-collapse:collapse;width:100%;margin-bottom:1.5rem}"
         "td,th{border-bottom:1px solid #ddd;padding:.35rem .6rem;text-align:left}"
         ".keeper{font-weight:600}.dup{color:#a33}"
+        ".ident{background:#e8eef9;border-radius:3px;padding:0 .35rem;"
+        "font-size:.85em;white-space:nowrap}"
         ".exact{background:#eef7ee}.variant{background:#fdf6e3}"
         "h2{margin-top:2rem;font-size:1rem}</style>",
         f"<h1>Duplicate report{' — ' + escape(account) if account else ''}</h1>",
@@ -79,18 +97,29 @@ def write_html(clusters: Sequence[Cluster], path: Path, *, account: str = "",
     if not clusters:
         parts.append("<p>No duplicates found.</p>")
     for i, cluster in enumerate(clusters, start=1):
+        labels = _exact_group_labels(cluster)
         parts.append(f"<h2 class='{cluster.kind}'>Cluster {i} — "
                      f"{cluster.kind}</h2>")
+        if cluster.kind == "variant" and cluster.exact_groups:
+            count = len(cluster.exact_groups)
+            parts.append(
+                f"<p>This cluster is a heuristic match, but it contains "
+                f"{count} byte-identical group{'s' if count > 1 else ''} "
+                f"(marked below) whose members are provably the same file.</p>"
+            )
         parts.append("<table><tr><th>Role</th><th>Path</th><th>Size</th>"
                      "<th>Dimensions</th><th>Modified</th></tr>")
         for member in cluster.members:
             keeper = member.path == cluster.keeper.path
             dims = (f"{member.width}×{member.height}"
                     if member.width and member.height else "—")
+            label = labels.get(member.path)
+            badge = (f" <span class='ident'>byte-identical #{label}</span>"
+                     if label else "")
             parts.append(
                 f"<tr class='{'keeper' if keeper else 'dup'}'>"
                 f"<td>{'keep' if keeper else 'duplicate'}</td>"
-                f"<td>{escape(member.path)}</td>"
+                f"<td>{escape(member.path)}{badge}</td>"
                 f"<td>{_human(member.size)}</td>"
                 f"<td>{dims}</td><td>{escape(member.mtime or '')}</td></tr>"
             )

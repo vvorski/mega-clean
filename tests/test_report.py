@@ -52,3 +52,29 @@ def test_empty_report_is_valid(tmp_path):
     write_html([], tmp_path / "r.html")
     assert summarize([])["clusters"] == 0
     assert "No duplicates" in (tmp_path / "r.html").read_text()
+
+
+def _variant_with_identical_pair():
+    a = n("beach.jpg", 500, "same")
+    b = n("beach-copy.jpg", 500, "same")
+    c = n("beach-small.jpg", 120, "resized")
+    return [Cluster("variant", (b, c, a), a)]
+
+
+def test_csv_labels_byte_identical_subgroups():
+    import csv as _csv
+    import tempfile
+    from pathlib import Path as _P
+    out = _P(tempfile.mkdtemp()) / "r.csv"
+    write_csv(_variant_with_identical_pair(), out)
+    rows = {r["path"]: r for r in _csv.DictReader(out.open())}
+    assert rows["beach.jpg"]["exact_group"] == rows["beach-copy.jpg"]["exact_group"]
+    assert rows["beach.jpg"]["exact_group"] != ""
+    assert rows["beach-small.jpg"]["exact_group"] == ""
+
+
+def test_html_flags_provably_identical_members(tmp_path):
+    out = tmp_path / "r.html"
+    write_html(_variant_with_identical_pair(), out)
+    text = out.read_text()
+    assert "byte-identical" in text

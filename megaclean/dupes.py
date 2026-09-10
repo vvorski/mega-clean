@@ -27,6 +27,23 @@ class Cluster:
     members: tuple[Node, ...]
     keeper: Node
 
+    @property
+    def exact_groups(self) -> tuple[tuple[Node, ...], ...]:
+        """Members that are byte-identical to each other, grouped.
+
+        A variant cluster reports as a whole that its members are the same
+        photo, which is a heuristic. Any subgroup sharing a signature is a
+        stronger claim than that -- provably the same bytes -- and the report
+        would otherwise bury it.
+        """
+        buckets: dict[str, list[Node]] = defaultdict(list)
+        for member in self.members:
+            buckets[member.sig].append(member)
+        groups = [tuple(sorted(g, key=lambda n: n.path))
+                  for g in buckets.values() if len(g) > 1]
+        groups.sort(key=lambda g: g[0].path)
+        return tuple(groups)
+
 
 class BKTree:
     """Metric tree over Hamming distance, so near-neighbour lookup is not O(n^2)."""

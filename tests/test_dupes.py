@@ -101,3 +101,40 @@ def test_nodes_from_rows_skips_unfingerprinted():
     ]
     nodes = nodes_from_rows(rows)
     assert [n.path for n in nodes] == ["a.jpg"]
+
+
+def test_exact_cluster_has_one_exact_group():
+    nodes = [node("a.jpg", sig="same"), node("b.jpg", sig="same")]
+    groups = cluster_nodes(nodes)[0].exact_groups
+    assert len(groups) == 1
+    assert [n.path for n in groups[0]] == ["a.jpg", "b.jpg"]
+
+
+def test_variant_cluster_surfaces_its_byte_identical_subgroup():
+    """A resize sitting alongside two identical copies must not hide the fact
+    that those two are provably the same bytes."""
+    nodes = [node("beach.jpg", sig="same", exif_key="k"),
+             node("beach-copy.jpg", sig="same", exif_key="k"),
+             node("beach-small.jpg", sig="resized", exif_key="k")]
+    cluster = cluster_nodes(nodes)[0]
+    assert cluster.kind == "variant"
+    assert len(cluster.exact_groups) == 1
+    assert [n.path for n in cluster.exact_groups[0]] == ["beach-copy.jpg",
+                                                         "beach.jpg"]
+
+
+def test_multiple_exact_groups_within_one_variant_cluster():
+    nodes = [node("a1.jpg", sig="A", exif_key="k"),
+             node("a2.jpg", sig="A", exif_key="k"),
+             node("b1.jpg", sig="B", exif_key="k"),
+             node("b2.jpg", sig="B", exif_key="k")]
+    groups = cluster_nodes(nodes)[0].exact_groups
+    assert len(groups) == 2
+    assert [[n.path for n in g] for g in groups] == [["a1.jpg", "a2.jpg"],
+                                                     ["b1.jpg", "b2.jpg"]]
+
+
+def test_variant_cluster_with_no_identical_members_has_no_exact_groups():
+    nodes = [node("a.jpg", sig="A", exif_key="k"),
+             node("b.jpg", sig="B", exif_key="k")]
+    assert cluster_nodes(nodes)[0].exact_groups == ()
