@@ -22,6 +22,7 @@ from .index import (
 from .local import local_scope, scan_local
 from .megaapi import MegaApi, session_from_rclone
 from .planner import build_plan, read_plan, write_plan
+from .previews import fetch_previews, preview_targets
 from .remote import RcloneRemote, Remote, join_remote_path
 from .gallery import write_gallery
 from .report import summarize, write_csv, write_html
@@ -132,6 +133,35 @@ def _cmd_fingerprint(args, conn, make_remote) -> int:
                                      targets, workers=args.workers)
     print(f"fingerprinted {ok}, failed {failed}")
     return 0 if failed == 0 else 1
+
+
+def _cmd_previews(args, conn, make_remote) -> int:
+    """Fetch real pictures for the gallery.
+
+    One image per identical group (its members are the same file) and every
+    member of a variant group, best groups first, so the transfer buys the most
+    useful pictures.
+    """
+    nodes = nodes_from_rows(iter_nodes(conn, "remote"))
+    if not nodes:
+        print("nothing indexed — run scan-fingerprints first", file=sys.stderr)
+        return 1
+    clusters = cluster_nodes(nodes, phash_threshold=args.threshold)
+    root = Path(args.thumbs)
+    targets = preview_targets(clusters, root, limit=args.limit,
+                              force=args.force)
+    if not targets:
+        print("every group already has a preview")
+        return 0
+    total = sum(min(size, args.max_bytes) for _, _, size in targets)
+    print(f"fetching {len(targets):,} preview images "
+          f"({total / 1e9:.2f} GB, workers={args.workers})")
+    with args.served_factory(args.remote) as remote:
+        ok, failed = fetch_previews(remote, targets, root,
+                                    workers=args.workers,
+                                    max_bytes=args.max_bytes)
+    print(f"previews written {ok:,}, failed {failed:,}")
+    return 0
 
 
 def _cmd_dupes(args, conn, make_remote) -> int:
@@ -261,6 +291,20 @@ def build_parser() -> argparse.ArgumentParser:
                    help="also write gallery thumbnails to this directory, "
                         "reusing the bytes already fetched")
     p.set_defaults(func=_cmd_verify)
+
+    p = sub.add_parser("previews",
+                       help="fetch gallery images (one per duplicate group)")
+    p.add_argument("--remote", default="mega")
+    p.add_argument("--thumbs", default=".megaclean/thumbs")
+    p.add_argument("--limit", type=int, default=None,
+                   help="only the N groups with the most reclaimable space")
+    p.add_argument("--workers", type=int, default=8)
+    p.add_argument("--threshold", type=int, default=6)
+    p.add_argument("--max-bytes", type=int, default=12 * 1024 * 1024,
+                   help="per-file cap on how much is fetched")
+    p.add_argument("--force", action="store_true",
+                   help="refetch even where a thumbnail already exists")
+    p.set_defaults(func=_cmd_previews)
 
     p = sub.add_parser("dupes", help="write the duplicate report")
     p.add_argument("--out", default="report.html")

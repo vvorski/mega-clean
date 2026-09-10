@@ -27,8 +27,20 @@ def _wasted(cluster: Cluster) -> int:
 def build_payload(clusters: Sequence[Cluster], *,
                   thumbs_dir: Path | None = None,
                   thumb_rel: str = "thumbs") -> dict:
+    def rel_thumb(key):
+        if thumbs_dir is None:
+            return None
+        candidate = thumb_path(thumbs_dir, key)
+        if not candidate.is_file():
+            return None
+        return f"{thumb_rel}/{candidate.parent.name}/{candidate.name}"
+
     groups = []
     for cluster in sorted(clusters, key=lambda c: -_wasted(c)):
+        # Members of a non-variant group are the same picture, so one preview
+        # stands in for all of them. Variants genuinely differ and never share.
+        shared = (rel_thumb(cluster.keeper.key)
+                  if cluster.kind != "variant" else None)
         exact_labels = {}
         for i, group in enumerate(cluster.exact_groups, start=1):
             for member in group:
@@ -47,11 +59,12 @@ def build_payload(clusters: Sequence[Cluster], *,
             }
             if m.key in exact_labels:
                 entry["identical"] = exact_labels[m.key]
-            if thumbs_dir is not None:
-                candidate = thumb_path(thumbs_dir, m.key)
-                if candidate.is_file():
-                    entry["thumb"] = (f"{thumb_rel}/{candidate.parent.name}/"
-                                      f"{candidate.name}")
+            own = rel_thumb(m.key)
+            if own:
+                entry["thumb"] = own
+            elif shared:
+                entry["thumb"] = shared
+                entry["shared_thumb"] = True
             members.append(entry)
         groups.append({
             "kind": cluster.kind,
@@ -260,6 +273,8 @@ def write_gallery(clusters: Sequence[Cluster], out_dir: Path, *,
             source = thumb_path(thumbs_dir, member["id"])
             target = out_dir / rel
             if target.exists():
+                continue
+            if not source.is_file():
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
             try:

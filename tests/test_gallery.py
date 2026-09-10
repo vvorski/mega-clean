@@ -91,3 +91,33 @@ def test_gallery_links_thumbnails_when_present(tmp_path):
     thumbed = [m for g in payload["groups"] for m in g["members"] if m.get("thumb")]
     assert len(thumbed) == 2
     assert all((out / m["thumb"]).exists() for m in thumbed)
+
+
+def test_identical_group_members_share_the_keeper_picture(tmp_path):
+    """Fetching one image per group is enough when the members are the same
+    file; the page should still show a picture for each."""
+    from megaclean.thumbs import thumb_path
+    thumbs = tmp_path / "thumbs"
+    p = thumb_path(thumbs, "h1")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"\xff\xd8\xff")
+    a = n("x/a.jpg", 500, "same", node_id="h1")
+    b = n("y/a.jpg", 500, "same", node_id="h2")
+    payload = build_payload([Cluster("exact", (a, b), a)], thumbs_dir=thumbs)
+    members = payload["groups"][0]["members"]
+    assert all(m.get("thumb") for m in members)
+    assert [m.get("shared_thumb") for m in members].count(True) == 1
+
+
+def test_variant_members_never_share_a_picture(tmp_path):
+    from megaclean.thumbs import thumb_path
+    thumbs = tmp_path / "thumbs"
+    p = thumb_path(thumbs, "h1")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"\xff\xd8\xff")
+    a = n("a.jpg", 500, "one", node_id="h1")
+    b = n("b.jpg", 300, "two", node_id="h2")
+    payload = build_payload([Cluster("variant", (a, b), a)], thumbs_dir=thumbs)
+    members = {m["id"]: m for m in payload["groups"][0]["members"]}
+    assert members["h1"].get("thumb")
+    assert not members["h2"].get("thumb")
