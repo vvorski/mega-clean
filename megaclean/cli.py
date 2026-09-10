@@ -15,6 +15,7 @@ from . import __version__
 from .doctor import run_checks
 from .dupes import cluster_nodes, nodes_from_rows
 from .fingerprint import run_fingerprint
+from .folders import analyse_folders, write_folder_plan
 from .index import (
     clear_errors, crc_group_ids, iter_nodes, open_index, pending_ids, set_crc,
     set_parent, size_collision_ids, targets_for, upsert_node,
@@ -134,6 +135,30 @@ def _cmd_fingerprint(args, conn, make_remote) -> int:
                                      targets, workers=args.workers)
     print(f"fingerprinted {ok}, failed {failed}")
     return 0 if failed == 0 else 1
+
+
+def _cmd_folders(args, conn, make_remote) -> int:
+    """Turn thousands of file decisions into a few dozen folder decisions."""
+    nodes = nodes_from_rows(iter_nodes(conn, "remote"))
+    if not nodes:
+        print("nothing indexed — run scan-fingerprints first", file=sys.stderr)
+        return 1
+    clusters = cluster_nodes(nodes, phash_threshold=args.threshold,
+                             prefer=tuple(args.prefer))
+    overlaps = analyse_folders(clusters, nodes, min_files=args.min_files)
+    prefer = tuple(args.prefer)
+    out = write_folder_plan(overlaps, Path(args.out),
+                            min_coverage=args.min_coverage, prefer=prefer)
+    from .folders import merge_decisions
+    decisions = merge_decisions(overlaps, prefer, args.min_coverage)
+    print(f"{len(decisions)} folder decisions covering "
+          f"{sum(d.shared_bytes for d in decisions) / 1e9:.2f} GB stored twice")
+    print(f"  remove outright (nothing unique): "
+          f"{sum(1 for d in decisions if d.must_move_files == 0)}")
+    print(f"  move files first: "
+          f"{sum(1 for d in decisions if d.must_move_files)}")
+    print(f"plan written to {out}")
+    return 0
 
 
 def _cmd_previews(args, conn, make_remote) -> int:
@@ -294,6 +319,18 @@ def build_parser() -> argparse.ArgumentParser:
                    help="also write gallery thumbnails to this directory, "
                         "reusing the bytes already fetched")
     p.set_defaults(func=_cmd_verify)
+
+    p = sub.add_parser("folders",
+                       help="folder-level cleanup plan (collapse decisions)")
+    p.add_argument("--out", default="folder-plan.md")
+    p.add_argument("--min-files", type=int, default=10,
+                   help="ignore folders smaller than this")
+    p.add_argument("--min-coverage", type=float, default=0.5,
+                   help="only list folders at least this duplicated elsewhere")
+    p.add_argument("--threshold", type=int, default=6)
+    p.add_argument("--prefer", action="append", default=[],
+                   help="path prefix of a canonical folder; repeatable")
+    p.set_defaults(func=_cmd_folders)
 
     p = sub.add_parser("previews",
                        help="fetch gallery images (one per duplicate group)")
