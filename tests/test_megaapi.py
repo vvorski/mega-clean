@@ -264,3 +264,71 @@ def test_handle_remote_reads_ranges_by_handle_not_path():
     remote = HandleRemote(api, {"H1": keyblob})
     assert remote.read_range("H1", 0, 100) == plain[:100]
     assert remote.read_range("H1", -100, 100) == plain[-100:]
+
+
+def _multi_key_folder_node(handle, parent, name, *, valid_first=True):
+    """A folder node whose `k` field carries two /-separated key entries, the
+    way MEGA re-encodes a node's key once it has ever been made into a public
+    or folder link. `valid_first` controls which entry is the one that
+    actually decrypts, to prove order does not matter."""
+    folderkey = bytes((i * 11 + 5) % 256 for i in range(16))
+    raw = b"MEGA" + json.dumps({"n": name}).encode()
+    raw += b"\0" * (-len(raw) % 16)
+    enc_attr = AES.new(folderkey, AES.MODE_CBC, b"\0" * 16).encrypt(raw)
+    good = f"owner:{b64encode(AES.new(MASTER, AES.MODE_ECB).encrypt(folderkey))}"
+    junk = f"{handle}:{b64encode(bytes(range(16)))}"       # decrypts, wrong key
+    k = f"{good}/{junk}" if valid_first else f"{junk}/{good}"
+    return {"h": handle, "p": parent, "t": 1, "k": k, "a": b64encode(enc_attr)}
+
+
+def test_multi_segment_key_field_resolves_regardless_of_order():
+    """The real account had a node whose `k` was '<owner>:<key>/<handle>:<key>'
+    -- naively taking the text after the first colon decrypts the WRONG
+    segment and the folder's name comes back undecodable."""
+    first = _multi_key_folder_node("f1", "root", "The Gathering", valid_first=True)
+    second = _multi_key_folder_node("f2", "root", "The Gathering", valid_first=False)
+    cipher = AES.new(MASTER, AES.MODE_ECB)
+    assert decrypt_attributes(first, cipher)["n"] == "The Gathering"
+    assert decrypt_attributes(second, cipher)["n"] == "The Gathering"
+
+
+def test_node_paths_recovers_full_paths_through_a_multi_key_ancestor():
+    """The exact shape of the real bug: a file three levels under a
+    multi-key-field folder used to come back with that folder's name missing
+    from its path entirely, rather than failing loudly."""
+    root_folder = _multi_key_folder_node("linked", "root", "The Gathering",
+                                         valid_first=False)
+    nodes = [
+        {"h": "root", "p": None, "t": 2},
+        root_folder,
+        _make_folder_node("sub", "linked", "Mexico"),
+        _make_file_node("n1", "sub", "clip.mp4", fingerprint=b64encode(bytes(19))),
+    ]
+    files = node_paths(nodes, MASTER)
+    assert [f.path for f in files] == ["The Gathering/Mexico/clip.mp4"]
+
+
+def test_node_paths_never_returns_a_truncated_path():
+    """If an ancestor is genuinely undecodable, the file must be skipped
+    entirely -- never reported at a path missing that ancestor's name, which
+    would look like a real (wrong) location instead of an unknown one."""
+    foreign_folder = _make_folder_node("locked", "root", "Shared")
+    foreign_folder["k"] = "someoneelse:" + b64encode(bytes(range(16, 32)))
+    nodes = [
+        {"h": "root", "p": None, "t": 2},
+        foreign_folder,
+        _make_folder_node("sub", "locked", "Mexico"),
+        _make_file_node("n1", "sub", "clip.mp4", fingerprint=b64encode(bytes(19))),
+    ]
+    assert node_paths(nodes, MASTER) == []
+
+
+def test_node_paths_still_works_for_the_ordinary_single_key_case():
+    """Regression guard: the common case (one key entry per node) must be
+    unaffected by the multi-segment handling."""
+    nodes = [
+        {"h": "root", "p": None, "t": 2},
+        _make_folder_node("f1", "root", "Photos"),
+        _make_file_node("n1", "f1", "a.jpg", fingerprint=b64encode(bytes(19))),
+    ]
+    assert [f.path for f in node_paths(nodes, MASTER)] == ["Photos/a.jpg"]

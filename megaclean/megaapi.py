@@ -75,37 +75,68 @@ def fingerprint_crc(fingerprint: str | None) -> bytes | None:
     return raw[:CRC_BYTES] if len(raw) >= CRC_BYTES else None
 
 
+def _node_key_candidates(node: dict, master: AES.AesEcbCipher) -> list[bytes]:
+    """Every key blob a node's `k` field carries, in order.
+
+    Usually one entry: `<owner>:<key>`. A node that was ever turned into a
+    public or folder link carries a second `<handle>:<key>` entry appended
+    after a `/`, re-wrapping the same key for the link. Naively taking
+    "everything after the first colon" silently decrypts whichever entry
+    happens to come first -- on this account that produced garbage for every
+    node inside two shared top-level folders, and `node_paths` below then
+    reported their contents at a path with the shared folder's name missing
+    entirely rather than failing loudly.
+    """
+    candidates = []
+    for segment in node.get("k", "").split("/"):
+        if not segment:
+            continue
+        _, sep, key_b64 = segment.rpartition(":")
+        key_b64 = key_b64 if sep else segment
+        try:
+            candidates.append(master.decrypt(b64decode(key_b64)))
+        except Exception:
+            continue
+    return candidates
+
+
+def resolve_node(node: dict, master: AES.AesEcbCipher) -> tuple[bytes, dict] | None:
+    """The (key, attributes) pair that actually decrypts this node.
+
+    Tries every key candidate the `k` field carries and keeps the one whose
+    decrypted attributes start with MEGA's signature -- with a multi-entry
+    `k` field, that is the only way to tell which candidate is the real one.
+    """
+    if not node.get("a"):
+        return None
+    for key_blob in _node_key_candidates(node, master):
+        key = (key_blob[:16] if len(key_blob) == 16
+               else attribute_key(key_blob) if len(key_blob) >= 32 else None)
+        if key is None:
+            continue
+        try:
+            raw = AES.new(key, AES.MODE_CBC, b"\0" * 16).decrypt(b64decode(node["a"]))
+        except Exception:
+            continue
+        if not raw.startswith(b"MEGA{"):
+            continue                    # decrypted with the wrong candidate
+        try:
+            attrs = json.loads(raw[4:].split(b"\0")[0].decode("utf-8", "replace"))
+        except Exception:
+            continue
+        return key_blob, attrs
+    return None
+
+
 def _node_key(node: dict, master: AES.AesEcbCipher) -> bytes | None:
-    blob = node.get("k", "")
-    if ":" in blob:
-        blob = blob.split(":", 1)[1]
-    if not blob:
-        return None
-    try:
-        return master.decrypt(b64decode(blob))
-    except Exception:
-        return None
+    resolved = resolve_node(node, master)
+    return resolved[0] if resolved else None
 
 
 def decrypt_attributes(node: dict, master: AES.AesEcbCipher) -> dict | None:
     """Decrypt a node's attribute blob, or None if it is not ours to read."""
-    key_blob = _node_key(node, master)
-    if not key_blob or not node.get("a"):
-        return None
-    key = (key_blob[:16] if len(key_blob) == 16
-           else attribute_key(key_blob) if len(key_blob) >= 32 else None)
-    if key is None:
-        return None
-    try:
-        raw = AES.new(key, AES.MODE_CBC, b"\0" * 16).decrypt(b64decode(node["a"]))
-    except Exception:
-        return None
-    if not raw.startswith(b"MEGA{"):
-        return None                     # decrypted with the wrong key
-    try:
-        return json.loads(raw[4:].split(b"\0")[0].decode("utf-8", "replace"))
-    except Exception:
-        return None
+    resolved = resolve_node(node, master)
+    return resolved[1] if resolved else None
 
 
 def node_paths(nodes: Sequence[dict], master_key: bytes) -> list[MegaFile]:
@@ -119,15 +150,29 @@ def node_paths(nodes: Sequence[dict], master_key: bytes) -> list[MegaFile]:
             attrs[node["h"]] = decoded
 
     def full_path(handle: str) -> str | None:
+        """The file's full path, or None if any ancestor cannot be resolved.
+
+        Never returns a path missing an ancestor's name: that would report
+        the file at a location that looks real but isn't -- exactly what
+        happened before this was fixed, when a file under an undecodable
+        shared folder came back as if the folder were not there at all.
+        """
         parts: list[str] = []
         seen = 0
-        while handle in by_handle and seen < 64:
+        while seen < 64:
+            node = by_handle.get(handle)
+            if node is None:
+                return None             # dangling parent reference
+            if node.get("t") != 0 and node.get("t") != 1:
+                break                   # reached the Cloud Drive / Inbox / bin root
             name = attrs.get(handle, {}).get("n")
             if name is None:
-                break                   # a parent we cannot read: path unknown
+                return None             # an ancestor we cannot decode
             parts.append(name)
-            handle = by_handle[handle].get("p")
+            handle = node.get("p")
             seen += 1
+        else:
+            return None                 # implausibly deep or cyclic: refuse
         return "/".join(reversed(parts)) if parts else None
 
     def root_type(handle: str) -> int | None:
